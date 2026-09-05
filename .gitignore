@@ -1,0 +1,33 @@
+# Binaries and compiled files
+*.exe
+*.exe~
+bin/
+bot.exe
+bridge/*.ex5
+bridge/compile.log
+
+# Personal Trading Data & Runtime State (Keep folder structure via .gitkeep)
+data/*.json
+!data/.gitkeep
+
+# Environment variables and secrets
+.env
+.env.local
+*.secret.yaml
+config/local.yaml
+
+# Logs
+*.log
+logs/
+
+# IDE and Editor Cache
+.claude/
+.vscode/
+.idea/
+*.swp
+*~
+
+# Operating System files
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,163 @@
+# =============================================================================
+# ScalpBot Configuration
+# =============================================================================
+# All values shown are defaults. Uncomment and modify as needed.
+# Environment variables with SCALP_ prefix override YAML values.
+
+bot:
+  symbol: "XAUUSDc"        # Gold Cent / XAUUSD target commodity
+  log_level: "info"        # Logging level: debug | info | warn | error
+
+# -----------------------------------------------------------------------------
+# Market Data
+# -----------------------------------------------------------------------------
+market_data:
+  tick_buffer_size: 4096   # Ring buffer capacity (number of ticks)
+  candle_period: 15m       # OHLCV aggregation period (M15 — Gold intraday swing momentum)
+  tick_channel_buf: 1024   # Tick channel buffer size for pipeline
+
+# -----------------------------------------------------------------------------
+# Strategy: Momentum Scalper (Trend Hunter) — M15 Execution with H1 Macro Trend
+# -----------------------------------------------------------------------------
+strategy:
+  timeframe: "M15"         # Primary strategy execution timeframe (15-Minute — high signal-to-noise)
+  macro_timeframe: "H1"    # Higher timeframe macro trend confirmation (1-Hour institutional trend)
+  fast_ema_period: 5       # Fast EMA lookback on M15 (= 75 minutes)
+  slow_ema_period: 13      # Slow EMA lookback on M15 (= 195 minutes)
+  rsi_period: 14           # RSI lookback
+  atr_period: 14           # ATR lookback (also used by risk engine)
+  rsi_overbought: 70.0     # RSI upper filter threshold
+  rsi_oversold: 30.0       # RSI lower filter threshold
+  atr_minimum: 0.50        # Minimum ATR for signal generation ($0.50 Gold M15 candle body)
+  sl_atr_multiplier: 1.5   # Stop Loss = 1.5x ATR (min $3.00 floor via asset_profile)
+  tp_atr_multiplier: 2.5   # Take Profit = 2.5x ATR (min $8.00 floor via asset_profile) -> RR 1:2.5
+  min_vol_ratio: 0.60       # Dead-Market Filter (Nyao Scalper VolRatio >= 60% of baseline ATR)
+  enable_limit_pullback: true # Discount Limit entry on breakout pullback (no buying the top)
+  pullback_discount_atr: 0.30 # 0.3x ATR retracement depth before entry
+
+# -----------------------------------------------------------------------------
+# Strategy: Mean-Reversion Range Scalper (Asian / Sideways Session)
+# -----------------------------------------------------------------------------
+range_strategy:
+  enabled: false           # DISABLED — Gold swing momentum mode: range scalper bypassed
+  bollinger_period: 20     # Bollinger Band window
+  bollinger_stddev: 2.0    # Standard deviations
+  rsi_period: 14           # RSI lookback
+  atr_period: 14           # ATR lookback
+  rsi_overbought: 62.0     # Reversal sell trigger
+  rsi_oversold: 38.0       # Reversal buy trigger
+  min_tp_points: 0.0003    # Minimum TP distance (~3 pips)
+
+# -----------------------------------------------------------------------------
+# Risk Management (Calibrated for 900 USC Cent Account)
+# -----------------------------------------------------------------------------
+risk:
+  initial_equity: 900.0    # Starting account balance: 900 USC (Cent Account)
+  risk_per_trade: 0.005    # Conservative risk per trade (0.5% equity = ~4.5 USC)
+  max_daily_drawdown: 0.05 # Max daily loss before circuit breaker trips (5% = 45 USC)
+  daily_profit_target_pct: 0.05 # 5% daily profit target lock (Auto Anti-Greed)
+  daily_profit_target_usd: 50.0 # 50.0 USC nominal target lock
+  max_spread_pips: 60.0    # Maximum allowed spread for Gold (60 pips = $0.60)
+  max_positions_per_symbol: 1 # Strict 1 position per symbol
+  max_open_positions: 1    # Strict 1 position (Gold-exclusive focus)
+  min_lot_size: 0.01       # Minimum position size
+  max_lot_size: 0.01       # Strictly fixed safe 0.01 lot for 900 USC capital
+  is_cent_account: true    # Cent account mode active
+  min_tick_velocity_tps: 0.0 # Min ticks/sec
+  max_tick_velocity_tps: 0.0 # Max ticks/sec
+
+# -----------------------------------------------------------------------------
+# Position Tracking & Trade Management — M15/H1 Intraday Swing (1h–2h trade horizon)
+# -----------------------------------------------------------------------------
+position:
+  enable_trailing: true       # Master switch for trailing stop
+  trailing_mode: "atr"        # ATR-based trailing — gives Gold swing room to breathe
+  trailing_stop_pips: 300.0   # Fallback fixed trailing (300 pips = $3.00) if ATR unavailable
+  trailing_atr_mult: 1.8      # ATR x1.8 trailing distance for M15 swings
+  enable_breakeven: true      # Master switch for break-even
+  breakeven_pips: 300.0       # Move SL to entry after +$3.00 profit (300 pips)
+  breakeven_buff_pips: 30.0   # Buffer above entry price for break-even SL (+$0.30 Gold)
+  enable_partial_tp: true     # Enable closing 50% lot at TP1 and letting remainder run
+  partial_tp_ratio: 0.5       # Lot fraction to close at TP1 (0.5 = 50%)
+  tp1_pips: 400.0             # Target pips for Partial TP1 ($4.00 = 400 pips)
+  tp2_pips: 1200.0            # Final target pips for TP2 ($12.00 = 1200 pips)
+  time_stop_duration: 120m    # Stagnant Trade Killer: auto-close if flat > 120 minutes (M15/H1)
+
+# -----------------------------------------------------------------------------
+# Trading Session Filter — London + NY Overlap Only (Best for Gold M5/M15)
+# -----------------------------------------------------------------------------
+session:
+  enabled: true            # Enable session-based trading restrictions
+  sessions:                # Active sessions (only trade during these windows)
+    - "london"             # 07:00-16:00 UTC (09:00-18:00 WIB)
+    - "newyork"            # 12:00-21:00 UTC (14:00-23:00 WIB)
+    - "overlap"            # 12:00-16:00 UTC (14:00-18:00 WIB) — Peak liquidity, lowest spread
+    # - "asian"            # 23:00-08:00 UTC (01:00-10:00 WIB) — Disable for Gold due to chop
+
+# -----------------------------------------------------------------------------
+# Order Executor
+# -----------------------------------------------------------------------------
+executor:
+  workers: 2               # Number of dispatcher worker goroutines
+  queue_size: 32           # Order channel buffer size
+
+# -----------------------------------------------------------------------------
+# Broker Adapter
+# -----------------------------------------------------------------------------
+broker:
+  type: "mt5"              # Broker type: "mock" | "mt5"
+  # Mock Broker settings:
+  fill_latency: 5ms        # Mock: simulated execution delay
+  slippage_pct: 0.00005    # Mock: max slippage as fraction (~0.5 pips)
+  reject_rate: 0.02        # Mock: order rejection probability (2%)
+  # MT5 Broker settings (when type: "mt5"):
+  mt5_command_addr: "127.0.0.1:5555" # MT5 EA Command port (REQ-REP)
+  mt5_stream_addr: "127.0.0.1:5556"  # MT5 EA Tick Stream port (PUB)
+  magic_number: 123456               # MT5 EA Magic Number
+  slippage_points: 10                # MT5 Execution slippage (points)
+
+# -----------------------------------------------------------------------------
+# Alerting & Notifications
+# -----------------------------------------------------------------------------
+notifier:
+  enable_log: true         # Log alerts to stdout (always recommended)
+  webhook_url: ""          # HTTP webhook URL (empty = disabled)
+  telegram_token: ""       # Telegram bot token (prefer env: SCALP_TG_TOKEN)
+  telegram_chat: ""        # Telegram chat ID (prefer env: SCALP_TG_CHAT)
+  enable_interactive_bot: true      # Enable 2-way Telegram polling & remote control (Inline Buttons)
+
+# -----------------------------------------------------------------------------
+# AI & Gaussian Hidden Markov Model (HMM) Decision Core — M5/M15 Intraday Swing
+# -----------------------------------------------------------------------------
+ai:
+  enable_ml_filter: true        # Enable AI Gaussian HMM regime scoring
+  dual_mode_enabled: false      # DISABLED for Gold M5/M15: Pure Trend mode (Range scalper causes whipsaws)
+  min_confidence: 0.55          # Calibrated 55% composite ensemble threshold (Balanced mode default)
+  range_min_confidence: 0.50    # 50% minimum confidence for Range setups (unused when dual_mode=false)
+  filter_ranging_chop: true     # Block trend breakout trades during Noise/Chop state
+
+# -----------------------------------------------------------------------------
+# Multi-Symbol Portfolio & Risk Budgeting
+# -----------------------------------------------------------------------------
+portfolio:
+  enable_correlation_guard: false  # Disabled (Single-commodity Gold focus)
+  max_correlated_positions: 1      # Maximum concurrent positions
+  volatility_parity_sizing: false  # Single-symbol Gold sizing (fixed safe 0.01 lot)
+
+# -----------------------------------------------------------------------------
+# Live Economic Calendar & News Auto-Blackout — Critical for Gold
+# -----------------------------------------------------------------------------
+news:
+  enable_auto_sync: false          # Set true when live HTTP calendar URL is provided
+  feed_url: ""                     # Economic calendar JSON feed URL
+  sync_interval: 1h                # Periodic calendar refresh interval
+  blackout_before: 30m             # Halt new orders 30 minutes before high-impact USD news (NFP, FOMC, CPI)
+  blackout_after: 15m              # Halt new orders 15 minutes after high-impact news
+
+# -----------------------------------------------------------------------------
+# Real-Time Web Dashboard & Control Center
+# -----------------------------------------------------------------------------
+web:
+  enabled: true                    # Enable local browser control dashboard
+  host: "127.0.0.1"                # Listen IP
+  port: 8080                       # Browser access port: http://127.0.0.1:8080

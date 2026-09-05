@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ScalpBot OS — High-Speed Institutional Control Center</title>
+  <meta name="description" content="Ultra-low latency institutional quantitative trading control dashboard for ScalpBot with real-time WebSocket telemetry.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css?v=2.7">
+  <!-- TradingView Lightweight Charts Library -->
+  <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <div class="app-container">
+    <!-- TOP NAVIGATION BAR -->
+    <header class="top-nav">
+      <div class="nav-left">
+        <div class="brand">
+          <div class="brand-logo">⚡</div>
+          <div class="brand-text">
+            <span class="brand-name">SCALPBOT</span>
+            <span class="brand-badge">GOLD TERMINAL</span>
+          </div>
+        </div>
+        <div class="status-badge" id="botStatusBadge">
+          <span class="status-dot"></span>
+          <span id="botStatusText">CONNECTING...</span>
+        </div>
+        <div class="mt5-badge" id="mt5BridgeBadge">
+          <span class="mt5-icon">🔗</span>
+          <span id="mt5StatusText">MT5 BRIDGE: LISTENING</span>
+        </div>
+      </div>
+
+      <!-- TRADING MODE SWITCHER -->
+      <div class="mode-switcher-bar">
+        <span class="mode-label">MODE:</span>
+        <div class="mode-btn-group">
+          <button id="btnModeSantai" class="btn-mode" onclick="window.app.setMode('SANTAI')" title="Conservative: Strict AI >= 75%, Wide SL/TP, Low Risk">
+            🌿 SANTAI
+          </button>
+          <button id="btnModeBalanced" class="btn-mode active" onclick="window.app.setMode('BALANCED')" title="Balanced: Standard Swing Hunter, AI >= 70%">
+            ⚖️ BALANCED
+          </button>
+          <button id="btnModeAgresif" class="btn-mode" onclick="window.app.setMode('AGRESIF')" title="Aggressive: Quick Momentum Capture (AI >= 40%)">
+            ⚡ AGRESIF
+          </button>
+        </div>
+      </div>
+
+      <!-- GOLD EXCLUSIVE & ACCOUNT BADGE -->
+      <div class="focus-switcher-bar">
+        <div class="gold-exclusive-badge" style="background: rgba(255, 193, 7, 0.15); border: 1px solid rgba(255, 193, 7, 0.4); color: #ffc107; padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 0.8rem; display: flex; align-items: center; gap: 6px;" title="100% Dedicated XAUUSD Commodity Swing Momentum Engine">
+          🪙 XAUUSD GOLD SPECIALIST (M15 / H1)
+        </div>
+        <div class="account-badge" id="accountBadge" style="background: rgba(0, 230, 118, 0.15); border: 1px solid rgba(0, 230, 118, 0.4); color: #00e676; padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 0.8rem; display: flex; align-items: center; gap: 6px; transition: all 0.3s ease;" title="Auto-Detected Account Environment">
+          <span id="accountBadgeIcon">💎</span>
+          <span id="accountBadgeText">REGULAR ACCOUNT (USD)</span>
+        </div>
+      </div>
+
+      <div class="nav-right">
+        <div class="session-clock">
+          <span class="clock-icon">🕒</span>
+          <span id="utcClock">--:--:-- UTC</span>
+        </div>
+        <button id="btnEmergencyStop" class="btn-emergency" title="Emergency Stop All Trades">
+          🚨 KILL SWITCH
+        </button>
+      </div>
+    </header>
+
+    <!-- KPI STATS CARDS -->
+    <section class="kpi-grid">
+      <div class="kpi-card" id="cardBalance">
+        <div class="kpi-label">ACCOUNT BALANCE</div>
+        <div class="kpi-value" id="valBalance">$0.00</div>
+        <div class="kpi-sub" id="subBalance">≈ Rp 0</div>
+      </div>
+
+      <div class="kpi-card" id="cardEquity">
+        <div class="kpi-label">NET EQUITY</div>
+        <div class="kpi-value" id="valEquity">$1,005.00</div>
+        <div class="kpi-sub" id="subEquity">Margin Free: 100%</div>
+      </div>
+
+      <div class="kpi-card highlight-card" id="cardFloatingPnL">
+        <div class="kpi-label">REAL-TIME FLOATING P&L</div>
+        <div class="kpi-value" id="valFloatingPnL">$0.00</div>
+        <div class="kpi-sub" id="subFloatingPips">0.0 pips floating</div>
+      </div>
+
+      <div class="kpi-card profit-target-card" id="cardProfitTarget">
+        <div class="kpi-label">🎯 DAILY PROFIT TARGET</div>
+        <div class="kpi-value" id="valProfitTarget">$0.00 / $50.00</div>
+        <div class="kpi-sub" id="subProfitTarget">Progress: 0.0% • Active</div>
+        <div class="profit-target-bar">
+          <div class="profit-target-fill" id="fillProfitTarget" style="width: 0%;"></div>
+        </div>
+      </div>
+
+      <div class="kpi-card" id="cardAIRegime">
+        <div class="kpi-label">AI MARKET REGIME</div>
+        <div class="kpi-value regime-text" id="valAIRegime">INITIALIZING</div>
+        <div class="kpi-sub" id="subAIConfidence">Confidence: --%</div>
+      </div>
+
+      <div class="kpi-card" id="cardWinRate">
+        <div class="kpi-label">WIN RATE & PROFIT FACTOR</div>
+        <div class="kpi-value" id="valWinRate">--%</div>
+        <div class="kpi-sub" id="subProfitFactor">PF: -- | Trades: 0</div>
+      </div>
+    </section>
+
+    <!-- VIEW TABS SWITCHER -->
+    <div class="view-tabs-bar">
+      <button id="tabBtnLive" class="view-tab-btn active" onclick="window.app.switchViewTab('LIVE')">
+        📈 LIVE TRADING MONITOR
+      </button>
+      <button id="tabBtnAnalytics" class="view-tab-btn" onclick="window.app.switchViewTab('ANALYTICS')">
+        📊 PERFORMANCE & TRADE ANALYTICS
+      </button>
+    </div>
+
+    <!-- MAIN DASHBOARD CONTENT -->
+    <main class="main-layout" id="viewLiveLayout">
+      <!-- LEFT / CENTER COLUMN -->
+      <div class="main-left">
+        <!-- LIVE TICKERS -->
+        <div class="panel ticker-panel">
+          <div class="panel-header">
+            <div class="panel-title-grp">
+              <h3>🪙 XAUUSD GOLD MARKET FEED</h3>
+              <span class="active-sym-count" id="activeSymCount">1 ACTIVE MARKET</span>
+            </div>
+            <div class="time-filter-grp">
+              <span class="time-lbl">WINDOW:</span>
+              <div class="tf-btn-grp">
+                <button class="btn-tf" data-tf="5m" onclick="window.app.setTimeframe('5m')">5M</button>
+                <button class="btn-tf" data-tf="15m" onclick="window.app.setTimeframe('15m')">15M</button>
+                <button class="btn-tf" data-tf="1h" onclick="window.app.setTimeframe('1h')">1H</button>
+                <button class="btn-tf" data-tf="4h" onclick="window.app.setTimeframe('4h')">4H</button>
+                <button class="btn-tf active" data-tf="24h" onclick="window.app.setTimeframe('24h')">24H</button>
+              </div>
+              <span class="pulse-indicator">● LIVE STREAM</span>
+            </div>
+          </div>
+          <div class="ticker-grid" id="tickerGrid">
+            <!-- Populated dynamically via JavaScript -->
+          </div>
+        </div>
+
+        <!-- TRADINGVIEW INTERACTIVE CANDLESTICK CHART PANEL -->
+        <div class="panel tv-chart-panel">
+          <div class="tv-chart-header">
+            <div class="tv-sym-tabs" id="tvSymTabs">
+              <button class="btn-tv-sym active" data-sym="XAUUSDc" onclick="window.app.selectChartSymbol('XAUUSDc')">🪙 XAUUSDc</button>
+            </div>
+            <div class="tv-header-right">
+              <div class="tv-tf-tabs">
+                <button class="btn-tv-tf" data-tf="5m" onclick="window.app.setChartTimeframe('5m')">5M</button>
+                <button class="btn-tv-tf active" data-tf="15m" onclick="window.app.setChartTimeframe('15m')">15M</button>
+                <button class="btn-tv-tf" data-tf="1h" onclick="window.app.setChartTimeframe('1h')">1H</button>
+              </div>
+              <span class="chart-clock-badge">🕒 <span id="tvChartClock">--:--:--</span></span>
+            </div>
+          </div>
+          <div class="tv-chart-wrapper">
+            <div class="tv-overlay-legend">
+              <div class="tv-legend-item"><span class="tv-legend-dot ema-fast"></span> EMA 5</div>
+              <div class="tv-legend-item"><span class="tv-legend-dot ema-slow"></span> EMA 13</div>
+              <div class="tv-legend-item"><span class="tv-legend-dot tp"></span> TP</div>
+              <div class="tv-legend-item"><span class="tv-legend-dot sl"></span> SL</div>
+              <div id="tvChartOHLC" class="tv-ohlc-values"></div>
+            </div>
+            <div id="tvChartContainer"></div>
+          </div>
+        </div>
+
+        <!-- REAL-TIME EQUITY & PNL CURVE -->
+        <div class="panel chart-panel">
+          <div class="panel-header">
+            <h3>📊 REAL-TIME EQUITY & P&L CURVE</h3>
+            <div class="chart-controls">
+              <span class="chart-badge">LIVE 60FPS</span>
+            </div>
+          </div>
+          <div class="chart-container">
+            <canvas id="equityChart" width="800" height="220"></canvas>
+          </div>
+        </div>
+
+        <!-- ACTIVE POSITIONS TABLE -->
+        <div class="panel positions-panel">
+          <div class="panel-header">
+            <h3>⚡ ACTIVE OPEN POSITIONS (<span id="posCount">0</span>)</h3>
+            <button class="btn-sm btn-danger" id="btnCloseAll">Close All Positions</button>
+          </div>
+          <div class="table-responsive">
+            <table class="positions-table">
+              <thead>
+                <tr>
+                  <th>ORDER ID</th>
+                  <th>SYMBOL</th>
+                  <th>SIDE</th>
+                  <th>LOTS</th>
+                  <th>ENTRY PRICE</th>
+                  <th>CURRENT PRICE</th>
+                  <th>STOP LOSS</th>
+                  <th>TAKE PROFIT</th>
+                  <th>FLOATING P&L</th>
+                  <th>MFE / MAE</th>
+                  <th>DURATION</th>
+                  <th>ACTION</th>
+                </tr>
+              </thead>
+              <tbody id="positionsBody">
+                <tr class="empty-row">
+                  <td colspan="12">No open floating positions — waiting for high-conviction AI signals</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT COLUMN: CONTROL & INTELLIGENCE -->
+      <aside class="main-right">
+        <!-- CONTROL CENTER PANEL -->
+        <div class="panel control-panel">
+          <div class="panel-header">
+            <h3>🎛️ OPERATIONAL CONTROLS</h3>
+          </div>
+          <div class="control-actions">
+            <div class="control-row">
+              <div class="ctrl-info">
+                <div class="ctrl-title">AI Machine Learning Filter</div>
+                <div class="ctrl-desc">EarnHFT Specialist Router</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="toggleAI" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="control-row">
+              <div class="ctrl-info">
+                <div class="ctrl-title">H1 Macro Trend Lock</div>
+                <div class="ctrl-desc">Strict H1/M15 Confluence</div>
+              </div>
+              <span class="status-pill green">LOCKED</span>
+            </div>
+
+            <div class="control-row">
+              <div class="ctrl-info">
+                <div class="ctrl-title">Wall & Exhaustion Gate</div>
+                <div class="ctrl-desc">Anti-Round Number Resistance</div>
+              </div>
+              <span class="status-pill green">ACTIVE</span>
+            </div>
+
+            <div class="control-row">
+              <div class="ctrl-info">
+                <div class="ctrl-title">Telegram Remote Control</div>
+                <div class="ctrl-desc">2-Way Mobile Polling</div>
+              </div>
+              <span class="status-pill green">ONLINE</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ECONOMIC CALENDAR & BLACKOUT STATUS -->
+        <div class="panel news-panel">
+          <div class="panel-header">
+            <h3>📰 ECONOMIC NEWS BLACKOUT</h3>
+          </div>
+          <div class="news-content" id="newsContent">
+            <div class="news-card safe-state">
+              <div class="news-top">
+                <span class="news-badge safe">MARKET CLEAR</span>
+                <span class="news-impact">NO HIGH-IMPACT NEWS</span>
+              </div>
+              <div class="news-title" id="newsTitle">No blackout active — safe to trade</div>
+              <div class="news-countdown" id="newsCountdown">Normal market conditions</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- LIVE AI DECISION & SIGNAL AUDIT FEED -->
+        <div class="panel signal-audit-panel">
+          <div class="panel-header">
+            <h3>🤖 LIVE AI SIGNAL & REJECTION AUDIT</h3>
+            <span class="audit-badge" id="auditCount">0 EVENTS</span>
+          </div>
+          <div class="signal-audit-list" id="signalAuditList">
+            <div class="empty-audit">Listening for strategy signals & AI decisions...</div>
+          </div>
+        </div>
+
+        <!-- EXECUTION TELEMETRY -->
+        <div class="panel telemetry-panel">
+          <div class="panel-header">
+            <h3>📡 EXECUTION TELEMETRY</h3>
+          </div>
+          <div class="telemetry-grid">
+            <div class="telem-item">
+              <span class="telem-label">AVG SLIPPAGE</span>
+              <span class="telem-val" id="telemSlippage">0.00 pips</span>
+            </div>
+            <div class="telem-item">
+              <span class="telem-label">FILL LATENCY</span>
+              <span class="telem-val" id="telemLatency">&lt; 1 ms</span>
+            </div>
+            <div class="telem-item">
+              <span class="telem-label">AI INFERENCE</span>
+              <span class="telem-val green">120 ns</span>
+            </div>
+            <div class="telem-item">
+              <span class="telem-label">WS LATENCY</span>
+              <span class="telem-val green" id="wsLatency">2 ms</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <!-- PERFORMANCE ANALYTICS VIEW TAB (Initially Hidden) -->
+    <section class="analytics-view" id="viewAnalyticsLayout" style="display: none;">
+      <!-- INSTITUTIONAL METRICS CARDS -->
+      <div class="analytics-grid">
+        <div class="analytics-card">
+          <span class="analytics-title">WIN RATE (%)</span>
+          <div class="analytics-val green" id="statWinRate">62.5%</div>
+          <span class="analytics-sub" id="statWinsLosses">10 Wins / 6 Losses</span>
+        </div>
+
+        <div class="analytics-card">
+          <span class="analytics-title">PROFIT FACTOR</span>
+          <div class="analytics-val gold" id="statProfitFactor">2.14</div>
+          <span class="analytics-sub" id="statGrossRatio">Gross: +$180.20 / -$84.10</span>
+        </div>
+
+        <div class="analytics-card">
+          <span class="analytics-title">REALIZED R:R RATIO</span>
+          <div class="analytics-val blue" id="statRealizedRRR">1 : 2.18</div>
+          <span class="analytics-sub" id="statAvgWinLoss">Avg Win: +$36.04 / Avg Loss: -$14.02</span>
+        </div>
+
+        <div class="analytics-card">
+          <span class="analytics-title">TOTAL NET PROFIT</span>
+          <div class="analytics-val green" id="statNetProfit">+$96.10</div>
+          <span class="analytics-sub" id="statTotalTrades">Total 16 Completed Trades</span>
+        </div>
+      </div>
+
+      <!-- PER-SYMBOL BREAKDOWN SECTION -->
+      <div class="panel">
+        <div class="panel-header">
+          <h3>🪙 PER-SYMBOL PROFITABILITY BREAKDOWN</h3>
+          <span class="chart-badge">ALPHA METRICS</span>
+        </div>
+        <div class="symbol-perf-grid" id="symbolPerfGrid">
+          <!-- Populated dynamically via JS -->
+        </div>
+      </div>
+
+      <!-- RECENT HISTORICAL TRADES TABLE -->
+      <div class="panel">
+        <div class="panel-header">
+          <h3>📜 COMPLETED TRADES AUDIT LOG</h3>
+          <button class="btn-sm" onclick="window.app.exportTradesCSV()">📥 Export CSV</button>
+        </div>
+        <div class="table-responsive">
+          <table class="positions-table">
+            <thead>
+              <tr>
+                <th>TICKET</th>
+                <th>SYMBOL</th>
+                <th>SIDE</th>
+                <th>LOTS</th>
+                <th>ENTRY</th>
+                <th>EXIT</th>
+                <th>NET PROFIT</th>
+                <th>MFE (PEAK)</th>
+                <th>MAE (DIP)</th>
+                <th>PIPS</th>
+                <th>HOLD TIME</th>
+                <th>CLOSE TIME</th>
+                <th>RESULT</th>
+              </tr>
+            </thead>
+            <tbody id="historyTableBody">
+              <tr class="empty-row">
+                <td colspan="13">Recording completed live trades...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- FOOTER -->
+    <footer class="app-footer">
+      <div>ScalpBot OS v2.2 • Institutional Quantitative Scalper • Pure Go Engine</div>
+      <div id="footerStatus">WebSocket Connected</div>
+    </footer>
+  </div>
+
+  <script src="js/app.js?v=2.7"></script>
+</body>
+</html>
