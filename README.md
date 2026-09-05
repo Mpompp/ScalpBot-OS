@@ -4,7 +4,7 @@ ScalpBot OS adalah mesin trading kuantitatif institusional (*Institutional Quant
 
 Seluruh jalur pemrosesan data pasar (*hot-path / onTick*) dirancang dengan prinsip **Zero-Heap Allocation** (`0 B/op, 0 allocs/op`) untuk menjamin eksekusi waktu nyata yang deterministik tanpa jeda *Garbage Collection (GC Pause)*.
 
-> 📋 **Dokumentasi Teknis Lengkap**: Lihat [`SYSTEM_ANALYSIS_EXPORT.md`](SYSTEM_ANALYSIS_EXPORT.md) untuk audit arsitektur dan logika kode lengkap.
+
 
 ---
 
