@@ -21,6 +21,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -297,6 +298,11 @@ func computePerformanceTelemetry() *web.PerformanceTelemetry {
 		rrr = avgWin / avgLoss
 	}
 
+	// Sort completedTrades chronologically ascending by CloseTime
+	sort.Slice(completedTrades, func(i, j int) bool {
+		return completedTrades[i].CloseTime.Before(completedTrades[j].CloseTime)
+	})
+
 	histList := make([]web.TradeRecordTelemetry, len(completedTrades))
 	for i := range completedTrades {
 		// Newest trade first
@@ -321,6 +327,11 @@ func computePerformanceTelemetry() *web.PerformanceTelemetry {
 			MAEPips:   revT.MaxAdversePips,
 		}
 	}
+
+	// Guarantee histList is strictly sorted descending by Timestamp (newest first)
+	sort.Slice(histList, func(i, j int) bool {
+		return histList[i].Timestamp > histList[j].Timestamp
+	})
 
 	return &web.PerformanceTelemetry{
 		TotalTrades:     total,
@@ -1207,6 +1218,11 @@ func main() {
 								}
 							}
 							closeTime := time.Unix(d.CloseTime, 0)
+							oneWeekAgo := time.Now().Add(-7 * 24 * time.Hour)
+							if closeTime.Before(oneWeekAgo) {
+								continue
+							}
+
 							mfeRecordsMu.RLock()
 							mfeRec, hasMFE := mfeRecords[d.Ticket]
 							mfeRecordsMu.RUnlock()
@@ -1234,9 +1250,18 @@ func main() {
 								completedTrades[existingIdx] = ct
 							} else {
 								completedTrades = append(completedTrades, ct)
-								existingTickets[d.Ticket] = len(completedTrades) - 1
 							}
 						}
+
+						// Guarantee completedTrades is sorted chronologically ascending
+						sort.Slice(completedTrades, func(i, j int) bool {
+							return completedTrades[i].CloseTime.Before(completedTrades[j].CloseTime)
+						})
+						// Rebuild existingTickets map
+						for idx, tr := range completedTrades {
+							existingTickets[tr.Ticket] = idx
+						}
+
 						tradeHistoryMu.Unlock()
 					}
 				}
@@ -1577,6 +1602,7 @@ func main() {
 					Balance:             currBalance,
 					Equity:              currEquity,
 					FloatingPnL:         totalFloat,
+					DailyPnL:            riskMgr.DailyPnL(),
 					DailyDrawdownPct:    0.0,
 					WinRatePct:          perfStats.WinRatePct,
 					ProfitFactor:        perfStats.ProfitFactor,

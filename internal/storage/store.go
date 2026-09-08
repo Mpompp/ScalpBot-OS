@@ -56,7 +56,7 @@ func NewStore(dataDir string) *Store {
 	}
 }
 
-// LoadTrades loads all saved completed trades from disk.
+// LoadTrades loads all saved completed trades from disk, keeping only the last 7 days.
 func (s *Store) LoadTrades() ([]TradeRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -72,7 +72,15 @@ func (s *Store) LoadTrades() ([]TradeRecord, error) {
 	if err := json.Unmarshal(data, &trades); err != nil {
 		return []TradeRecord{}, nil
 	}
-	return trades, nil
+
+	cutoff := time.Now().Add(-7 * 24 * time.Hour)
+	var recent []TradeRecord
+	for _, t := range trades {
+		if t.CloseTime.After(cutoff) {
+			recent = append(recent, t)
+		}
+	}
+	return recent, nil
 }
 
 // SaveTrade appends a single completed trade and persists to disk.
@@ -86,19 +94,23 @@ func (s *Store) SaveTrade(tr TradeRecord) error {
 		_ = json.Unmarshal(data, &trades)
 	}
 
-	// Deduplication: prevent duplicate trade saving
+	cutoff := time.Now().Add(-7 * 24 * time.Hour)
+	var pruned []TradeRecord
 	for _, existing := range trades {
 		if existing.Ticket == tr.Ticket {
 			return nil
 		}
+		if existing.CloseTime.After(cutoff) {
+			pruned = append(pruned, existing)
+		}
 	}
 
-	trades = append(trades, tr)
-	if len(trades) > 1000 {
-		trades = trades[len(trades)-1000:]
+	pruned = append(pruned, tr)
+	if len(pruned) > 500 {
+		pruned = pruned[len(pruned)-500:]
 	}
 
-	marshaled, err := json.MarshalIndent(trades, "", "  ")
+	marshaled, err := json.MarshalIndent(pruned, "", "  ")
 	if err != nil {
 		return err
 	}

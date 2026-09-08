@@ -343,25 +343,50 @@ class DashboardApp {
     if (!this.tvCandleSeries || !candles || candles.length === 0) return;
     const minTime = candles[0].time;
     const maxTime = candles[candles.length - 1].time;
-    const markers = [];
+
+    const findCandleTime = (ts) => {
+      if (ts < minTime || ts > maxTime + 600) return null;
+      for (let i = 0; i < candles.length; i++) {
+        const c = candles[i].time;
+        const next = (i < candles.length - 1) ? candles[i + 1].time : c + 300;
+        if (ts >= c && ts < next) return c;
+      }
+      if (ts >= maxTime && ts <= maxTime + 600) return maxTime;
+      return null;
+    };
+
+    const markerMap = new Map();
 
     // 1. Completed historical trades within candle time range
     if (this.tradeHistory && this.tradeHistory.length > 0) {
       for (const t of this.tradeHistory) {
         let tradeSec = t.timestamp;
-        if (!tradeSec && t.time) {
-          // Fallback approximate time
-          continue;
+        if (!tradeSec && t.date && t.time) {
+          tradeSec = Math.floor(new Date(`${t.date}T${t.time}`).getTime() / 1000);
         }
-        if (tradeSec >= minTime && tradeSec <= maxTime) {
-          const isWin = (t.pnl || 0) >= 0;
-          const pnlSign = isWin ? '+' : '';
-          markers.push({
-            time: tradeSec,
+        if (!tradeSec) continue;
+
+        const barTime = findCandleTime(tradeSec);
+        if (!barTime) continue;
+
+        const pnl = t.pnl !== undefined ? t.pnl : (t.net_pnl || 0);
+        const isWin = pnl >= 0;
+        const pnlSign = isWin ? '+' : '';
+        const itemText = `${isWin ? '🏆 TP' : '🛑 SL'} ${pnlSign}$${pnl.toFixed(2)}`;
+
+        if (markerMap.has(barTime)) {
+          const existing = markerMap.get(barTime);
+          existing.text += ` | ${itemText}`;
+          if (!isWin) {
+            existing.color = '#ef4444';
+          }
+        } else {
+          markerMap.set(barTime, {
+            time: barTime,
             position: isWin ? 'aboveBar' : 'belowBar',
-            color: isWin ? '#10b981' : '#f43f5e',
+            color: isWin ? '#10b981' : '#ef4444',
             shape: isWin ? 'circle' : 'square',
-            text: `${isWin ? '🏆 TP' : '🛑 SL'} ${pnlSign}$${(t.pnl || 0).toFixed(2)}`,
+            text: itemText,
           });
         }
       }
@@ -371,24 +396,32 @@ class DashboardApp {
     if (this.lastPositionsData && this.lastPositionsData.length > 0) {
       for (const pos of this.lastPositionsData) {
         const entrySec = Math.floor((pos.open_time_ns || 0) / 1e9);
-        if (entrySec >= minTime && entrySec <= maxTime) {
-          markers.push({
-            time: entrySec,
+        const barTime = findCandleTime(entrySec);
+        if (!barTime) continue;
+
+        const itemText = `🎯 ENTRY ${pos.side} @ ${(pos.entry_price || 0).toFixed(2)}`;
+        if (markerMap.has(barTime)) {
+          const existing = markerMap.get(barTime);
+          existing.text += ` | ${itemText}`;
+        } else {
+          markerMap.set(barTime, {
+            time: barTime,
             position: pos.side === 'BUY' ? 'belowBar' : 'aboveBar',
             color: '#38bdf8',
             shape: pos.side === 'BUY' ? 'arrowUp' : 'arrowDown',
-            text: `🎯 ENTRY ${pos.side} @ ${(pos.entry_price || 0).toFixed(2)}`,
+            text: itemText,
           });
         }
       }
     }
 
     // Sort markers strictly increasing by time for LightweightCharts
+    const markers = Array.from(markerMap.values());
     markers.sort((a, b) => a.time - b.time);
     try {
       this.tvCandleSeries.setMarkers(markers);
     } catch (e) {
-      // Ignored if duplicate timestamps exist
+      console.warn('[TVChart] setMarkers error:', e);
     }
   }
 
@@ -765,9 +798,14 @@ class DashboardApp {
     }
 
     // Card 6: TODAY'S WIN RATE & PERFORMANCE (SESSION ONLY)
-    // As explicitly instructed by user: ONLY for today's trades!
+    // As explicitly instructed by user: ONLY for today's trades in local date!
     if (p.performance && p.performance.trade_history) {
-      const todayDateStr = new Date().toISOString().slice(0, 10);
+      const now = new Date();
+      const localYear = now.getFullYear();
+      const localMonth = String(now.getMonth() + 1).padStart(2, '0');
+      const localDay = String(now.getDate()).padStart(2, '0');
+      const todayDateStr = `${localYear}-${localMonth}-${localDay}`;
+
       const todayTrades = p.performance.trade_history.filter(t => {
         const d = t.date || (t.time ? t.date : '') || (t.close_time ? t.close_time.slice(0, 10) : '');
         return d === todayDateStr;
@@ -901,14 +939,28 @@ class DashboardApp {
   updateProfitTarget(p) {
     if (!this.valProfitTarget) return;
 
-    const dailyPnL = (p.equity || 1005) - (p.balance || 1000);
+    let todayRealized = 0;
+    if (p.daily_pnl !== undefined && Math.abs(p.daily_pnl) > 0.0001) {
+      todayRealized = p.daily_pnl;
+    } else if (p.performance && p.performance.trade_history) {
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = String(now.getMonth() + 1).padStart(2, '0');
+      const d = String(now.getDate()).padStart(2, '0');
+      const localToday = `${y}-${m}-${d}`;
+      todayRealized = p.performance.trade_history
+        .filter(t => t.date === localToday || (t.close_time && t.close_time.startsWith(localToday)))
+        .reduce((sum, t) => sum + (t.pnl !== undefined ? t.pnl : (t.net_pnl || 0)), 0);
+    }
+    const floating = p.floating_pnl || ((p.equity || 0) - (p.balance || 0));
+    const dailyPnL = todayRealized + floating;
     const target = p.profit_target_amount || 50.0;
     const progress = Math.max(0, Math.min(100, (dailyPnL / target) * 100));
 
     const sign = dailyPnL >= 0 ? '+' : '';
     this.valProfitTarget.textContent = `${sign}$${dailyPnL.toFixed(2)} / +$${target.toFixed(2)}`;
 
-    if (p.profit_target_reached) {
+    if (p.profit_target_reached || dailyPnL >= target) {
       this.cardProfitTarget.classList.add('achieved');
       this.subProfitTarget.textContent = '🏆 TARGET ACHIEVED — Capital Protected';
       if (this.fillProfitTarget) this.fillProfitTarget.style.width = '100%';
@@ -1580,6 +1632,13 @@ class DashboardApp {
       }
 
       return true;
+    });
+
+    // Guarantee filtered is strictly sorted by timestamp descending (newest trade on top)
+    filtered.sort((a, b) => {
+      const timeA = a.timestamp || (a.date && a.time ? new Date(`${a.date}T${a.time}`).getTime() / 1000 : 0);
+      const timeB = b.timestamp || (b.date && b.time ? new Date(`${b.date}T${b.time}`).getTime() / 1000 : 0);
+      return timeB - timeA;
     });
 
     if (filtered.length === 0) {

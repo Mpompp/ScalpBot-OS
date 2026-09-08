@@ -20,6 +20,7 @@ type TelemetryPayload struct {
 	Balance             float64                      `json:"balance"`
 	Equity              float64                      `json:"equity"`
 	FloatingPnL         float64                      `json:"floating_pnl"`
+	DailyPnL            float64                      `json:"daily_pnl"`
 	DailyDrawdownPct    float64                      `json:"daily_drawdown_pct"`
 	WinRatePct          float64                      `json:"win_rate_pct"`
 	ProfitFactor        float64                      `json:"profit_factor"`
