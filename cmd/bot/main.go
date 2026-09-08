@@ -1809,8 +1809,27 @@ func main() {
 				}
 				if len(p.Snapshots) == 0 || nowTick.Sub(p.Snapshots[len(p.Snapshots)-1].Timestamp) >= 30*time.Second {
 					p.Snapshots = append(p.Snapshots, PriceSnapshot{Timestamp: nowTick, Price: tick.Bid})
-					if len(p.Snapshots) > 3000 {
+					if len(p.Snapshots) > 2880 {
 						p.Snapshots = p.Snapshots[len(p.Snapshots)-2880:]
+					}
+					// Periodically re-derive true 24h rolling high/low from active snapshots
+					if len(p.Snapshots)%10 == 0 && len(p.Snapshots) > 0 {
+						minP := p.Snapshots[0].Price
+						maxP := p.Snapshots[0].Price
+						for _, s := range p.Snapshots {
+							if s.Price > maxP {
+								maxP = s.Price
+							}
+							if s.Price > 0 && s.Price < minP {
+								minP = s.Price
+							}
+						}
+						if maxP > 0 {
+							p.High24h = maxP
+						}
+						if minP > 0 {
+							p.Low24h = minP
+						}
 					}
 				}
 				p.mu.Unlock()
@@ -1910,6 +1929,9 @@ func main() {
 						})
 					} else {
 						mfeRecordsMu.Lock()
+						if len(mfeRecords) > 300 {
+							mfeRecords = make(map[string]struct{ mfeUSD, maeUSD, mfePips, maePips float64 })
+						}
 						mfeRecords[ce.OrderID] = struct{ mfeUSD, maeUSD, mfePips, maePips float64 }{
 							mfeUSD: ce.MaxFavorableUSD, maeUSD: ce.MaxAdverseUSD, mfePips: ce.MaxFavorablePips, maePips: ce.MaxAdversePips,
 						}
@@ -2533,8 +2555,8 @@ func main() {
 					}
 				}
 
-				// 4. Dynamic Volatility-Adjusted Lot Sizing (if enabled)
-				if cfg.Portfolio.VolatilityParitySizing {
+				// 4. Dynamic Volatility-Adjusted Lot Sizing (if enabled and user hasn't overridden)
+				if cfg.Portfolio.VolatilityParitySizing && userCustomLot < 0.01 {
 					order.Lots = volatilitySizer.CalculateLotSize(sig.Symbol, riskMgr.Equity(), atrVal)
 				}
 
