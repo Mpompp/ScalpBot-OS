@@ -1,7 +1,6 @@
 package ai
 
 import (
-	"fmt"
 	"math"
 	"sync"
 
@@ -185,104 +184,44 @@ func (f *SignalFilter) EvaluateSignal(
 	hmmConf := f.lastHMMConfidence
 	regime := f.lastRegime
 
-	// 2. Component A: Gaussian HMM Regime Score (Weight: 45%)
-	// Severe Counter-Trend Guard: Reject if HMM is firmly against the trade direction
-	if sig.Type == model.Buy && state == hmm.StateBear && hmmConf >= 0.65 {
-		return false, hmmConf, regime, fmt.Sprintf(
-			"AI Filter 🛑 REJECT: BUY blocked by strong Bearish HMM regime (state=%s, conf=%.1f%%)",
-			state.String(), hmmConf*100.0,
-		)
-	}
-	if sig.Type == model.Sell && state == hmm.StateBull && hmmConf >= 0.65 {
-		return false, hmmConf, regime, fmt.Sprintf(
-			"AI Filter 🛑 REJECT: SELL blocked by strong Bullish HMM regime (state=%s, conf=%.1f%%)",
-			state.String(), hmmConf*100.0,
-		)
-	}
-
-	var hmmScore float64
+	// 2. Component A: Gaussian HMM Market Regime & Expansion Weather (Weight: 50%)
+	var hmmScore float64 = 0.50
 	switch state {
 	case hmm.StateBull:
 		if sig.Type == model.Buy {
-			hmmScore = hmmConf
+			hmmScore = 0.50 + 0.50*hmmConf
 		} else {
-			hmmScore = 1.0 - hmmConf
+			hmmScore = 0.50 - 0.50*hmmConf
 		}
 	case hmm.StateBear:
 		if sig.Type == model.Sell {
-			hmmScore = hmmConf
+			hmmScore = 0.50 + 0.50*hmmConf
 		} else {
-			hmmScore = 1.0 - hmmConf
+			hmmScore = 0.50 - 0.50*hmmConf
 		}
-	default: // hmm.StateNoise / Transition
-		// Neutral baseline for transitioning/consolidating market
+	default: // hmm.StateNoise / Ranging Chop
+		if f.cfg.FilterRangingChop {
+			return false, 0.35, regime, "AI Filter REJECT: Market is in Ranging/Chop state (HMM StateNoise)"
+		}
 		hmmScore = 0.50
 	}
 
-	// 3. Component B: GBDT Microstructure Scorer (Weight: 35%)
+	// 3. Component B: GBDT Microstructure & Candlestick Scorer (Weight: 50%)
 	var gbdtScore float64 = 0.50
 	if f.scorer != nil {
 		gbdtScore = f.scorer.PredictConfidence(sig.Type, fv)
 	}
 
-	// 4. Component C: Candlestick Health & Rejection Wick Quality (Weight: 20%)
-	upperWick := fv[FeatUpperWickRatio]
-	lowerWick := fv[FeatLowerWickRatio]
-	rsiNorm := fv[FeatRSINorm] // [-1.0, +1.0], 0 = RSI 50, +0.36 = RSI 68, -0.36 = RSI 32
-
-	var candleScore float64 = 0.60 // baseline healthy candle
-	if sig.Type == model.Buy {
-		if upperWick <= 0.25 {
-			candleScore += 0.25 // Clean breakout body
-		} else if upperWick > 0.45 {
-			candleScore -= 0.35 // Notable upper resistance wick
-		}
-		// RSI ceiling check (RSI > 72.5)
-		if rsiNorm > 0.45 {
-			candleScore -= 0.25
-		} else if rsiNorm > 0.10 && rsiNorm < 0.35 {
-			candleScore += 0.15 // Prime momentum sweet spot (RSI 55-67)
-		}
-	} else if sig.Type == model.Sell {
-		if lowerWick <= 0.25 {
-			candleScore += 0.25 // Clean breakdown body
-		} else if lowerWick > 0.45 {
-			candleScore -= 0.35 // Notable lower support wick
-		}
-		// RSI floor check (RSI < 27.5)
-		if rsiNorm < -0.45 {
-			candleScore -= 0.25
-		} else if rsiNorm < -0.10 && rsiNorm > -0.35 {
-			candleScore += 0.15 // Prime momentum sweet spot (RSI 33-45)
-		}
-	}
-	// Clamp candleScore to [0.0, 1.0]
-	if candleScore < 0.0 {
-		candleScore = 0.0
-	} else if candleScore > 1.0 {
-		candleScore = 1.0
-	}
-
-	// 5. Calculate Unified Composite Confidence
-	// 45% HMM Regime + 35% GBDT Microstructure + 20% Candlestick Health
-	compositeConf := (0.45 * hmmScore) + (0.35 * gbdtScore) + (0.20 * candleScore)
+	// 4. Calculate Unified Composite Confidence: 50% HMM Market Weather + 50% GBDT Trigger Quality
+	compositeConf := (0.50 * hmmScore) + (0.50 * gbdtScore)
 	f.lastConfidence = compositeConf
 
-	// 6. Single Master Decision Gate
+	// 5. Single Master Decision Gate
 	if compositeConf < f.cfg.MinConfidence {
-		reason := fmt.Sprintf(
-			"AI Filter 🛑 REJECT: %s composite confidence %.1f%% < min %.1f%% (HMM: %.0f%%, Micro: %.0f%%, Candle: %.0f%%)",
-			sig.Type.String(), compositeConf*100.0, f.cfg.MinConfidence*100.0,
-			hmmScore*100.0, gbdtScore*100.0, candleScore*100.0,
-		)
-		return false, compositeConf, regime, reason
+		return false, compositeConf, regime, "AI Filter REJECT: composite confidence below threshold"
 	}
 
-	reason := fmt.Sprintf(
-		"Composite Conf: %.0f%% (HMM: %.0f%%, Micro: %.0f%%, Candle: %.0f%%)",
-		compositeConf*100.0, hmmScore*100.0, gbdtScore*100.0, candleScore*100.0,
-	)
-	return true, compositeConf, regime, reason
+	return true, compositeConf, regime, "AI Filter ALLOW: composite confidence passed"
 }
 
 // Name returns the identifier for this filter.

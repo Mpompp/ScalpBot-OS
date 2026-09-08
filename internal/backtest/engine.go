@@ -26,13 +26,13 @@ type EngineConfig struct {
 	AIConfig       ai.FilterConfig
 }
 
-// DefaultEngineConfig returns standard backtest configuration for EURUSD scalping.
+// DefaultEngineConfig returns standard backtest configuration for Gold (XAUUSD) scalping.
 func DefaultEngineConfig() EngineConfig {
 	return EngineConfig{
 		InitialBalance:   10000.0,
-		Symbol:           "EURUSD",
-		CandlePeriod:     5 * time.Second,
-		SlippagePips:     0.1,
+		Symbol:           "XAUUSD",
+		CandlePeriod:     5 * time.Minute, // M5 Execution (realistic for small accounts)
+		SlippagePips:     1.0,
 		CommissionPerLot: 3.50,
 		StrategyConfig: strategy.MomentumScalperConfig{
 			FastEMAPeriod: 5,
@@ -41,35 +41,37 @@ func DefaultEngineConfig() EngineConfig {
 			ATRPeriod:     14,
 			RSIOverbought: 70.0,
 			RSIOversold:   30.0,
-			ATRMinimum:    0.0003,
-			Symbol:        "EURUSD",
+			ATRMinimum:    0.35, // Scaled for M5 Gold
+			Symbol:        "XAUUSD",
 		},
 		RiskConfig: risk.ManagerConfig{
-			InitialEquity:    10000.0,
-			RiskPerTrade:     0.01,
-			MaxDailyDrawdown: 0.05,
-			MaxSpreadPips:    2.0,
-			MaxOpenPositions: 3,
-			MinLotSize:       0.01,
-			MaxLotSize:       1.0,
+			InitialEquity:        10000.0,
+			RiskPerTrade:         0.01,
+			MaxDailyDrawdown:     0.05,
+			MaxSpreadPips:        60.0,
+			MaxOpenPositions:     2,
+			MaxPositionsPerSymbol: 1,
+			MinLotSize:           0.01,
+			MaxLotSize:           0.01, // Fixed safe 0.01 lot
 		},
 		TrackerConfig: executor.TrackerConfig{
-			TrailingMode:      executor.TrailingFixed,
-			TrailingStopPips:  10.0,
+			TrailingMode:      executor.TrailingATR,
+			TrailingStopPips:  150.0, // $1.50 trailing room
 			TrailingATRMult:   1.5,
-			BreakEvenPips:     5.0,
-			BreakEvenBuffPips: 1.0,
+			BreakEvenPips:     200.0, // $2.00 profit before BE
+			BreakEvenBuffPips: 20.0,  // $0.20 buffer above entry
 			EnableTrailing:    true,
 			EnableBreakEven:   true,
 			EnablePartialTP:   true,
 			PartialTPRatio:    0.5,
-			TP1Pips:           5.0,
-			TP2Pips:           15.0,
-			TimeStopDuration:  15 * time.Minute,
+			TP1Pips:           300.0, // $3.00 Partial TP1
+			TP2Pips:           600.0, // $6.00 Final TP2
+			TimeStopDuration:  45 * time.Minute,
+			AutoRemoveOnClose: true,
 		},
 		AIConfig: ai.FilterConfig{
 			EnableMLFilter:    true,
-			MinConfidence:     0.65,
+			MinConfidence:     0.55,
 			FilterRangingChop: true,
 		},
 	}
@@ -189,6 +191,7 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 		sig = strat.OnTick(tick)
 
 		if candle, closed := aggregator.OnTick(tick); closed {
+			aiFilter.UpdateHMM(candle, atrVal)
 			cSig := strat.OnCandle(candle)
 			if cSig.IsActionable() {
 				sig = cSig
@@ -241,8 +244,8 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 					Position:   pos,
 					Commission: comm,
 				}
-				tracker.Add(pos, 0, 0)
-				riskMgr.RecordFill()
+				tracker.Add(pos, order.StopLoss, order.TakeProfit)
+				riskMgr.RecordFillForSymbol(symbol)
 			}
 		}
 

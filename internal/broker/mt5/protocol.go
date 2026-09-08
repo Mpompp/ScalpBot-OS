@@ -9,17 +9,19 @@ const (
 	ActionBuy       Action = "BUY"
 	ActionSell      Action = "SELL"
 	ActionClose     Action = "CLOSE"
+	ActionModify    Action = "MODIFY"
 	ActionPositions Action = "POSITIONS"
 	ActionAccount   Action = "ACCOUNT"
 	ActionHistory   Action = "HISTORY"
+	ActionCandles   Action = "CANDLES"
 	ActionPing      Action = "PING"
 )
 
 // TradeRequest is the JSON command payload sent to the MT5 Bridge.
 type TradeRequest struct {
-	Action      Action  `json:"action"`                 // BUY, SELL, CLOSE, POSITIONS, ACCOUNT, HISTORY, PING
+	Action      Action  `json:"action"`                 // BUY, SELL, CLOSE, POSITIONS, ACCOUNT, HISTORY, CANDLES, PING
 	RequestID   string  `json:"request_id"`             // Correlation ID
-	Symbol      string  `json:"symbol,omitempty"`       // Currency pair, e.g. "EURUSD"
+	Symbol      string  `json:"symbol,omitempty"`       // Target instrument, e.g. "XAUUSDc", "XAUUSD"
 	Lots        float64 `json:"lots,omitempty"`         // Volume
 	Price       float64 `json:"price,omitempty"`        // Expected entry or limit price
 	StopLoss    float64 `json:"stop_loss,omitempty"`    // SL price level
@@ -28,6 +30,8 @@ type TradeRequest struct {
 	MagicNumber int     `json:"magic_number,omitempty"` // EA identifier
 	Ticket      string  `json:"ticket,omitempty"`       // Position ticket (for CLOSE)
 	Days        float64 `json:"days,omitempty"`         // Days back for HISTORY
+	Timeframe   string  `json:"timeframe,omitempty"`    // e.g. "M1", "M5", "M15", "H1"
+	Count       int     `json:"count,omitempty"`        // Number of candles requested
 }
 
 // TradeResponse is the execution response received from MT5.
@@ -42,7 +46,18 @@ type TradeResponse struct {
 	Positions   []PositionDTO    `json:"positions,omitempty"`   // For POSITIONS action
 	Account     *AccountDTO      `json:"account,omitempty"`     // For ACCOUNT action
 	History     []HistoryDealDTO `json:"history,omitempty"`     // For HISTORY action
+	Candles     []CandleDTO      `json:"candles,omitempty"`     // For CANDLES action
 	TimestampNs int64            `json:"timestamp_ns"`          // MT5 response time in nanoseconds
+}
+
+// CandleDTO represents an OHLCV candlestick bar from MT5 CopyRates.
+type CandleDTO struct {
+	Time   int64   `json:"time"` // Epoch seconds
+	Open   float64 `json:"open"`
+	High   float64 `json:"high"`
+	Low    float64 `json:"low"`
+	Close  float64 `json:"close"`
+	Volume int64   `json:"volume"`
 }
 
 // HistoryDealDTO represents an official closed deal reported by MT5 terminal history.

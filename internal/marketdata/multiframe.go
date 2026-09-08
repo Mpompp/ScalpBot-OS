@@ -156,23 +156,30 @@ func (st *SymbolTimeframes) recalculateM5Indicators() {
 	fastK := 2.0 / (10.0 + 1.0)
 	slowK := 2.0 / (25.0 + 1.0)
 
-	var fast, slow float64
-	for i, c := range st.m5Candles {
-		if i == 0 {
-			fast = c.Close
-			slow = c.Close
-			continue
+	lastClose := st.m5Candles[len(st.m5Candles)-1].Close
+
+	if st.m5FastEMA == 0 || st.m5SlowEMA == 0 {
+		var fast, slow float64
+		for i, c := range st.m5Candles {
+			if i == 0 {
+				fast = c.Close
+				slow = c.Close
+				continue
+			}
+			fast = (c.Close * fastK) + (fast * (1.0 - fastK))
+			slow = (c.Close * slowK) + (slow * (1.0 - slowK))
 		}
-		fast = (c.Close * fastK) + (fast * (1.0 - fastK))
-		slow = (c.Close * slowK) + (slow * (1.0 - slowK))
+		st.m5FastEMA = fast
+		st.m5SlowEMA = slow
+	} else {
+		// Incremental O(1) update on new closed candle
+		st.m5FastEMA = (lastClose * fastK) + (st.m5FastEMA * (1.0 - fastK))
+		st.m5SlowEMA = (lastClose * slowK) + (st.m5SlowEMA * (1.0 - slowK))
 	}
 
-	st.m5FastEMA = fast
-	st.m5SlowEMA = slow
-
-	if fast > slow*1.0002 {
+	if st.m5FastEMA > st.m5SlowEMA*1.0002 {
 		st.trendM5 = HTFTrendBullish
-	} else if fast < slow*0.9998 {
+	} else if st.m5FastEMA < st.m5SlowEMA*0.9998 {
 		st.trendM5 = HTFTrendBearish
 	} else {
 		st.trendM5 = HTFTrendNeutral

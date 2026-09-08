@@ -20,4 +20,10 @@ type Broker interface {
 	// Close closes an open position by its broker-assigned order ID.
 	// Returns an error if the position cannot be closed.
 	Close(ctx context.Context, positionID string) error
+
+	// ClosePartial closes a portion of an open position by its broker-assigned order ID.
+	ClosePartial(ctx context.Context, positionID string, lots float64) error
+
+	// ModifyPosition adjusts the stop loss and take profit of an active position.
+	ModifyPosition(ctx context.Context, positionID string, sl, tp float64) error
 }

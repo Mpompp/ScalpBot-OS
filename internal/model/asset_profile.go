@@ -34,24 +34,7 @@ type AssetProfile struct {
 func DetectAssetClass(symbol string) AssetProfile {
 	sym := strings.ToUpper(strings.TrimSpace(symbol))
 
-	// 1. GOLD / XAU (Primary Engine Focus)
-	if strings.Contains(sym, "XAU") || strings.Contains(sym, "GOLD") {
-		return AssetProfile{
-			Class:           AssetClassGold,
-			DisplayName:     "Gold Commodity (XAUUSD)",
-			Icon:            "🪙",
-			PipMultiplier:   100.0, // 1 pip = $0.01 (100 pips = $1.00 move)
-			MinTPDistance:   8.00,  // $8.00 TP move (M15 Gold swing minimum 1:2.5 RRR)
-			MaxTPDistance:   25.00, // $25.00 move (H1 macro swing trend target)
-			MinSLDistance:   3.00,  // $3.00 SL move (300 pips — M15 volatility buffer)
-			MaxLots:         0.05,  // Strict cap on small accounts
-			DefaultLots:     0.01,
-			StagnantMinutes: 60,    // 60 min stagnant killer (1 Hour trade horizon)
-			IsGold:          true,
-		}
-	}
-
-	// 2. CRYPTO & INDICES
+	// 1. CRYPTO & INDICES (Explicit match)
 	if strings.Contains(sym, "BTC") || strings.Contains(sym, "US30") || strings.Contains(sym, "NAS") {
 		return AssetProfile{
 			Class:           AssetClassCrypto,
@@ -68,19 +51,41 @@ func DetectAssetClass(symbol string) AssetProfile {
 		}
 	}
 
-	// 3. FOREX (Standard Fallback)
+	// 2. FOREX (Explicit match only for legacy/testing tools)
+	if strings.Contains(sym, "EUR") || strings.Contains(sym, "GBP") || strings.Contains(sym, "AUD") || strings.Contains(sym, "NZD") || strings.Contains(sym, "CAD") || strings.Contains(sym, "CHF") || strings.HasSuffix(sym, "JPY") {
+		return AssetProfile{
+			Class:           AssetClassForex,
+			DisplayName:     "Forex Major",
+			Icon:            "💵",
+			PipMultiplier:   10000.0,
+			MinTPDistance:   0.0010,
+			MaxTPDistance:   0.0035,
+			MinSLDistance:   0.0005,
+			MaxLots:         0.10,
+			DefaultLots:     0.01,
+			StagnantMinutes: 25,
+			IsForex:         true,
+		}
+	}
+
+	// 3. GOLD / XAU (Primary Engine Focus & Standard Fallback)
+	maxLots := 0.10 // Standard ceiling for Micro/Regular accounts (XAUUSDm)
+	if strings.HasSuffix(strings.ToLower(symbol), "c") {
+		maxLots = 1.00 // Cent accounts (XAUUSDc) have 100x smaller contract size
+	}
+
 	return AssetProfile{
-		Class:           AssetClassForex,
-		DisplayName:     "Forex Major",
-		Icon:            "💵",
-		PipMultiplier:   10000.0,
-		MinTPDistance:   0.0010,
-		MaxTPDistance:   0.0035,
-		MinSLDistance:   0.0005,
-		MaxLots:         0.10,
+		Class:           AssetClassGold,
+		DisplayName:     "Gold Commodity (XAUUSD)",
+		Icon:            "🪙",
+		PipMultiplier:   100.0, // 1 pip = $0.01 (100 pips = $1.00 move)
+		MinTPDistance:   6.00,  // $6.00 TP move (M5 Gold scalping minimum 1:2.0 RRR)
+		MaxTPDistance:   25.00, // $25.00 move (H1 macro swing trend target)
+		MinSLDistance:   3.00,  // $3.00 SL move (300 pips — M5 volatility buffer)
+		MaxLots:         maxLots,
 		DefaultLots:     0.01,
-		StagnantMinutes: 25,
-		IsForex:         true,
+		StagnantMinutes: 45,    // 45 min stagnant killer (M5 trade horizon)
+		IsGold:          true,
 	}
 }
 

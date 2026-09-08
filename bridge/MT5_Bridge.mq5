@@ -20,7 +20,7 @@ input ulong    InpMagicNumber = 123456;      // EA Magic Number
 input ulong    InpSlippage    = 10;          // Slippage in points
 input int      InpTimerMs     = 50;          // Polling timer interval (ms)
 input string   InpCustomSuffix= "";          // Optional Symbol Suffix override (e.g. 'c', '.m', '.pro')
-input string   InpSymbolsToStream = "";      // Comma-separated symbols (blank = auto-stream all MarketWatch symbols: EURUSD, XAUUSD, etc.)
+input string   InpSymbolsToStream = "";      // Comma-separated symbols (blank = auto-stream Gold symbols: XAUUSD, XAUUSDc, etc.)
 
 //--- Global socket handles
 int       g_cmdSocket    = INVALID_HANDLE;
@@ -262,23 +262,25 @@ void StreamAllConfiguredTicks()
    // Always push the current chart symbol
    PushSymbolTick(_Symbol);
 
-   // Auto-stream standard majors (EURUSD, GBPUSD, USDJPY, XAUUSD)
-   string defaultPairs[] = {"EURUSD", "GBPUSD", "USDJPY", "XAUUSD"};
+   // Auto-stream Gold commodity instruments (XAUUSD and cent/micro variants)
+   string defaultPairs[] = {"XAUUSD", "GOLD"};
    for(int i = 0; i < ArraySize(defaultPairs); i++)
    {
       string sym = ResolveSymbol(defaultPairs[i]);
-      if(sym != _Symbol)
+      if(sym != _Symbol && sym != "")
       {
          PushSymbolTick(sym);
       }
    }
 
-   // Also stream any other active MarketWatch symbols
+   // Also stream any active MarketWatch symbols dedicated to Gold
    int total = SymbolsTotal(true);
    for(int i = 0; i < total; i++)
    {
       string sym = SymbolName(i, true);
-      if(sym != _Symbol)
+      string symUpper = sym;
+      StringToUpper(symUpper);
+      if(sym != _Symbol && (StringFind(symUpper, "XAU") >= 0 || StringFind(symUpper, "GOLD") >= 0))
       {
          PushSymbolTick(sym);
       }
@@ -480,7 +482,7 @@ void EnforceStopsOnOpenPositions()
                double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
 
                double dist = 0;
-               int handle = iATR(pSym, PERIOD_M1, 14);
+               int handle = iATR(pSym, PERIOD_M5, 14);
                if(handle != INVALID_HANDLE)
                {
                   double atrVal[];
@@ -492,16 +494,20 @@ void EnforceStopsOnOpenPositions()
                   IndicatorRelease(handle);
                }
                
-               if(dist <= 0)
+               if(StringFind(pSym, "XAU") >= 0 || StringFind(pSym, "GOLD") >= 0)
+               {
+                  if(dist < 3.50) dist = 3.50; // Minimum $3.50 SL on Gold
+               }
+               else if(dist <= 0)
                {
                   double point = SymbolInfoDouble(pSym, SYMBOL_POINT);
                   dist = 50 * point; // ~5 pips default fallback
                   if(StringFind(pSym, "JPY") >= 0) dist = 0.05;
-                  else if(StringFind(pSym, "XAU") >= 0 || StringFind(pSym, "GOLD") >= 0) dist = 1.00;
                }
 
+               double tpDist = dist * 2.0; // 1:2 RRR target
                double targetSL = (pType == POSITION_TYPE_BUY) ? openPrice - dist : openPrice + dist;
-               double targetTP = (pType == POSITION_TYPE_BUY) ? openPrice + dist : openPrice - dist;
+               double targetTP = (pType == POSITION_TYPE_BUY) ? openPrice + tpDist : openPrice - tpDist;
 
                g_trade.PositionModify(ticket, NormalizeDouble(targetSL, pDigits), NormalizeDouble(targetTP, pDigits));
             }
@@ -609,7 +615,43 @@ string HandleSingleCommand(string jsonReq)
    if(action == "CLOSE")
    {
       ulong ticket = (ulong)StringToInteger(ticketStr);
-      bool res = g_trade.PositionClose(ticket);
+      bool res = false;
+      if(lots > 0 && PositionSelectByTicket(ticket))
+      {
+         double curVol = PositionGetDouble(POSITION_VOLUME);
+         if(lots < curVol - 0.0001)
+         {
+            res = g_trade.PositionClosePartial(ticket, lots);
+         }
+         else
+         {
+            res = g_trade.PositionClose(ticket);
+         }
+      }
+      else
+      {
+         res = g_trade.PositionClose(ticket);
+      }
+      uint retcode = g_trade.ResultRetcode();
+      if(res || retcode == TRADE_RETCODE_DONE)
+      {
+         return StringFormat("{\"request_id\":\"%s\",\"success\":true,\"retcode\":%u,\"ticket\":\"%I64u\",\"timestamp_ns\":%I64d}",
+                             reqId, retcode, ticket, nowNs);
+      }
+      else
+      {
+         return StringFormat("{\"request_id\":\"%s\",\"success\":false,\"retcode\":%u,\"error_msg\":\"%s\",\"timestamp_ns\":%I64d}",
+                             reqId, retcode, g_trade.ResultRetcodeDescription(), nowNs);
+      }
+   }
+
+   // --- MODIFY (SL/TP) ---
+   if(action == "MODIFY")
+   {
+      ulong ticket = (ulong)StringToInteger(ticketStr);
+      if(sl > 0) sl = NormalizeDouble(sl, digits);
+      if(tp > 0) tp = NormalizeDouble(tp, digits);
+      bool res = g_trade.PositionModify(ticket, sl, tp);
       uint retcode = g_trade.ResultRetcode();
       if(res || retcode == TRADE_RETCODE_DONE)
       {
@@ -750,6 +792,48 @@ string HandleSingleCommand(string jsonReq)
       }
       dealsJson += "]";
       return StringFormat("{\"request_id\":\"%s\",\"success\":true,\"history\":%s,\"timestamp_ns\":%I64d}", reqId, dealsJson, nowNs);
+   }
+
+   // --- CANDLES / RATES ---
+   if(action == "CANDLES" || action == "RATES")
+   {
+      string reqTf = ExtractJsonString(jsonReq, "timeframe");
+      double countDbl = ExtractJsonDouble(jsonReq, "count");
+      int count = (int)countDbl;
+      if(count <= 0) count = 100;
+      if(count > 300) count = 300;
+
+      ENUM_TIMEFRAMES tf = PERIOD_M5;
+      if(reqTf == "M1") tf = PERIOD_M1;
+      else if(reqTf == "M5") tf = PERIOD_M5;
+      else if(reqTf == "M15") tf = PERIOD_M15;
+      else if(reqTf == "H1") tf = PERIOD_H1;
+
+      MqlRates rates[];
+      ArraySetAsSeries(rates, false); // 0 is oldest, count-1 is newest
+      int copied = CopyRates(symbol, tf, 0, count, rates);
+      if(copied <= 0)
+      {
+         return StringFormat("{\"request_id\":\"%s\",\"success\":false,\"error_msg\":\"Failed to copy rates for %s\",\"timestamp_ns\":%I64d}",
+                             reqId, symbol, nowNs);
+      }
+
+      string candlesJson = "[";
+      for(int i = 0; i < copied; i++)
+      {
+         if(i > 0) candlesJson += ",";
+         candlesJson += StringFormat("{\"time\":%I64d,\"open\":%s,\"high\":%s,\"low\":%s,\"close\":%s,\"volume\":%I64d}",
+                                     (long)rates[i].time,
+                                     DoubleToString(rates[i].open, digits),
+                                     DoubleToString(rates[i].high, digits),
+                                     DoubleToString(rates[i].low, digits),
+                                     DoubleToString(rates[i].close, digits),
+                                     (long)rates[i].tick_volume);
+      }
+      candlesJson += "]";
+
+      return StringFormat("{\"request_id\":\"%s\",\"success\":true,\"symbol\":\"%s\",\"timeframe\":\"%s\",\"count\":%d,\"candles\":%s,\"timestamp_ns\":%I64d}",
+                          reqId, symbol, reqTf, copied, candlesJson, nowNs);
    }
 
    if(StringLen(action) == 0)

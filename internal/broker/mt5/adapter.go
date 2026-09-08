@@ -104,9 +104,15 @@ func (a *Adapter) Execute(ctx context.Context, order model.OrderRequest) (model.
 
 // Close closes an open position in MT5 by its order/ticket ID.
 func (a *Adapter) Close(ctx context.Context, positionID string) error {
+	return a.ClosePartial(ctx, positionID, 0)
+}
+
+// ClosePartial closes a portion of an open position in MT5 (or all if lots == 0).
+func (a *Adapter) ClosePartial(ctx context.Context, positionID string, lots float64) error {
 	req := TradeRequest{
 		Action:      ActionClose,
 		Ticket:      positionID,
+		Lots:        lots,
 		Slippage:    a.cfg.Slippage,
 		MagicNumber: a.cfg.MagicNumber,
 	}
@@ -118,6 +124,28 @@ func (a *Adapter) Close(ctx context.Context, positionID string) error {
 
 	if !resp.Success {
 		return fmt.Errorf("mt5 close failed: %s (retcode=%d)", resp.ErrorMsg, resp.RetCode)
+	}
+
+	return nil
+}
+
+// ModifyPosition adjusts the stop loss and take profit of an active position in MT5.
+func (a *Adapter) ModifyPosition(ctx context.Context, positionID string, sl, tp float64) error {
+	req := TradeRequest{
+		Action:      ActionModify,
+		Ticket:      positionID,
+		StopLoss:    sl,
+		TakeProfit:  tp,
+		MagicNumber: a.cfg.MagicNumber,
+	}
+
+	resp, err := a.server.SendCommand(ctx, req)
+	if err != nil {
+		return fmt.Errorf("mt5 modify error: %w", err)
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("mt5 modify failed: %s (retcode=%d)", resp.ErrorMsg, resp.RetCode)
 	}
 
 	return nil
@@ -215,6 +243,27 @@ func (a *Adapter) FetchHistoryDeals(ctx context.Context, days float64) ([]Histor
 	}
 
 	return resp.History, nil
+}
+
+// FetchCandles requests historical OHLCV candlestick bars from MT5 CopyRates.
+func (a *Adapter) FetchCandles(ctx context.Context, symbol string, timeframe string, count int) ([]CandleDTO, error) {
+	req := TradeRequest{
+		Action:    ActionCandles,
+		Symbol:    symbol,
+		Timeframe: timeframe,
+		Count:     count,
+	}
+
+	resp, err := a.server.SendCommand(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("mt5 fetch candles error: %w", err)
+	}
+
+	if !resp.Success {
+		return nil, fmt.Errorf("mt5 fetch candles failed: %s", resp.ErrorMsg)
+	}
+
+	return resp.Candles, nil
 }
 
 // StreamTicks listens on the stream socket and pipes ticks into tickCh.

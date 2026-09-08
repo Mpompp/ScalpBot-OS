@@ -19,14 +19,14 @@ type SyntheticConfig struct {
 	Seed          int64
 }
 
-// DefaultSyntheticConfig returns realistic forex market defaults for EURUSD.
+// DefaultSyntheticConfig returns realistic market defaults for Gold (XAUUSD).
 func DefaultSyntheticConfig() SyntheticConfig {
 	return SyntheticConfig{
-		StartPrice:    1.10000,
-		Drift:         0.0000005,
-		Volatility:    0.00006,
-		BaseSpreadPip: 0.3,
-		SpreadNoise:   0.1,
+		StartPrice:    2900.00,
+		Drift:         0.000002, // Realistic micro-drift per tick (~$0.0058/tick)
+		Volatility:    0.000030, // Realistic tick standard deviation (~$0.087/tick)
+		BaseSpreadPip: 45.0,     // 45 pips ($0.45) realistic broker cent spread
+		SpreadNoise:   10.0,     // Spread jitter 35-55 pips
 		Interval:      100 * time.Millisecond,
 		Seed:          42,
 	}

@@ -1,332 +1,276 @@
-﻿# ⚡ ScalpBot OS — High-Speed Institutional Quantitative Scalper
+# ⚡ ScalpBot OS — High-Speed Institutional Quantitative Scalper
 
-ScalpBot OS adalah mesin trading kuantitatif institusional (*Institutional Quantitative Multi-Symbol Scalping Engine*) berlatensi ultra rendah (*sub-microsecond internal execution*) yang dibangun secara murni menggunakan **Go (Golang) 1.22+** dan terhubung langsung ke **MetaTrader 5 (MT5)** melalui jembatan *native dual TCP socket IPC* berkecepatan tinggi tanpa dependensi CGO, ZeroMQ, atau library pihak ketiga.
+[![Go Version](https://img.shields.io/badge/Go-1.22%20%2F%201.23-00ADD8?style=flat-square&logo=go)](https://golang.org)
+[![Zero Allocation](https://img.shields.io/badge/Hot--Path-0%20B%2Fop%20(Zero--Alloc)-brightgreen?style=flat-square)](https://github.com/Mpompp/ScalpBot-OS)
+[![MT5 IPC](https://img.shields.io/badge/Bridge-Native%20Dual%20TCP%20(5555%2F5556)-blue?style=flat-square)](https://www.metatrader5.com)
+[![Asset Focus](https://img.shields.io/badge/Target-XAUUSD%20%2F%20Gold%20Commodity-ffd700?style=flat-square)](https://github.com/Mpompp/ScalpBot-OS)
+[![Telegram Remote](https://img.shields.io/badge/Mobile-2--Way%20Telegram%20Remote-26A5E4?style=flat-square&logo=telegram)](https://telegram.org)
+[![UI Dashboard](https://img.shields.io/badge/Dashboard-Linear%20Style%20v4.7-6366F1?style=flat-square)](http://127.0.0.1:8080)
 
-Seluruh jalur pemrosesan data pasar (*hot-path / onTick*) dirancang dengan prinsip **Zero-Heap Allocation** (`0 B/op, 0 allocs/op`) untuk menjamin eksekusi waktu nyata yang deterministik tanpa jeda *Garbage Collection (GC Pause)*.
+**ScalpBot OS** adalah mesin trading kuantitatif institusional (*Institutional Multi-Symbol Quantitative Scalping Engine*) berlatensi ultra-rendah (*sub-microsecond internal execution*) yang dibangun secara murni menggunakan **Go (Golang) 1.23** dan terhubung langsung ke **MetaTrader 5 (MT5)** melalui jembatan *native dual TCP socket IPC* berkecepatan tinggi tanpa dependensi CGO, ZeroMQ, atau runtime pihak ketiga.
 
-
-
----
-
-## 🏛️ Arsitektur Sistem Terintegrasi
-
-## 🔥 Volatility-Filtered Donchian Breakout Strategy (Utama)
-
-Strategi utama sekarang adalah **Donchian Breakout** dengan filter volatilitas ATR, tren EMA, dan range filter. Ini adalah strategi yang paling konservatif dan sesuai dengan target 5-15% per bulan dengan profit factor ≥1.5.
-
-Parameter default (setelah calibrate via backtest + forward test):
-- ATR Period: 18
-- EMA Filter Period: 42 (M15)
-- Donchian Bars: 24
-- Range Multiplier: 1.35
-- Risk Per Trade: 0.4%
-- Max Open Positions: 1
-- Circuit Breaker: 12% drawdown / 2.5% daily loss
-- Max Daily Trades: 7
-- Max Spread: 35 pips
-
-Ini strategi momentum breakout yang mekanis, mudah diuji, dan tidak ada martingale/grid.
+Seluruh jalur pemrosesan data pasar (*hot-path / onTick*) dirancang dengan prinsip **Zero-Heap Allocation (`0 B/op, 0 allocs/op`)** pada CPU stack untuk menjamin eksekusi waktu nyata yang deterministik tanpa jeda *Garbage Collection (GC Pause)*.
 
 ---
 
+## 🏛️ Arsitektur Pipeline Sistem
 
-```
-                                  [MetaTrader 5 Tick Stream (PUB 5556)]
-                                                    │
-                                           tickCh (Multi-Symbol)
-                                                    │
-                   ┌────────────────────────────────┴────────────────────────────────┐
-                   ▼                                                                 ▼
-     [Tick RingBuffer (Per Symbol)]                                     [Active Position Tracker]
-           (Fixed-size 4096)                                                         │
-                   │                                                                 ├─ Trailing Stop (Adaptive ATR / Pips)
-         [OHLCVAggregator (M1)]                                                      ├─ Auto Break-Even (Buffer Protection)
-                   │                                                                 ├─ Multi-Stage Partial TP (50% Scaling)
-         [Dual-Strategy Engine]                                                      ├─ Stagnant Trade Auto-Killer (35m)
-         ├─ Trend Momentum Scalper (EMA5/13+RSI)                                     ├─ Dynamic Time-Stop Duration
-         └─ Mean-Reversion Range Scalper (Bollinger)                                 └─ Real-Time Floating P&L & Pip Tracker
-                   │                                                                         │
-              signalCh (64)                                                                  ▼
-                   │                                                            [Broker.Close / Modify Stop]
-      [AI & ML Intelligence Gate]                                                            │
-      ├─ Macro Trend Guard (M1/M5/M15 Alignment)                                             ▼
-      ├─ Gaussian HMM 3-State Regime Detector (36 ns/op, 0 B/op)               [Disk Persistence Store]
-      │   ├─ StateNoise  → 100% IDLE (blocks all orders)                        ├─ data/trade_history.json
-      │   ├─ StateBull   → BUY only  (conf >= 70%)                              └─ data/daily_state.json
-      │   └─ StateBear   → SELL only (conf >= 70%)
-      ├─ 12 Zero-Alloc Feature Extractor (138 ns/op)
-      ├─ Anti-Pucuk & Anti-Lembah Exhaustion Guards
-      └─ GBDT Decision Tree Ensemble Scorer (15 ns/op)
+```text
+                                  [MetaTrader 5 Native Tick Stream (PUB 5556)]
+                                                        │
+                                               tickCh (Multi-Symbol)
+                                                        │
+                   ┌────────────────────────────────────┴────────────────────────────────────┐
+                   ▼                                                                         ▼
+     [Tick RingBuffer (Per Symbol)]                                             [Active Position Tracker]
+           (Fixed-size 4096)                                                                 │
+                   │                                                                         ├─ Multi-Stage Dynamic Profit Locker
+         [OHLCVAggregator (M5)]                                                              │  ├─ Phase 1: Structure Swing Invalidation
+                   │                                                                         │  ├─ Stage 1: Break-Even Buffer (Gain >= 1.5x ATR)
+     [Institutional Pullback Retest]                                                         │  ├─ Stage 2: 50% Profit Lock (Gain >= 2.0x ATR)
+     ├─ FastEMA(5) & SlowEMA(13) Dynamics                                                    │  └─ Stage 3: 75% Runner Lock (Gain >= 2.8x ATR)
+     ├─ Anti-Extension Filter (<= 0.40x ATR)                                                 ├─ Trailing Stop (Step Throttle min $0.25)
+     ├─ Value Area Retest & Wick Rejection (>= 20%)                                          ├─ Stagnant Trade Auto-Killer (45m Time-Stop)
+     └─ Structure-Based Swing SL & TP Sizer (RRR >= 1:2.2)                                   └─ Real-Time Floating P&L, MFE/MAE Tracker
+                   │                                                                                 │
+              signalCh (64)                                                                          ▼
+                   │                                                                    [PositionModify / Close]
+                   ▼                                                                                 │
+     ╔═══════════════════════════════════════════════════════════════╗                               ▼
+     ║             5-LAYER INSTITUTIONAL DEFENSE GATES               ║                   [Disk Persistence Store]
+     ╠═══════════════════════════════════════════════════════════════╣                   ├─ data/trade_history.json
+     ║ 🛡️ Gate 0: London Open Trap Blackout (14:00 - 14:45 WIB)      ║                   └─ data/daily_state.json
+     ║ 🛡️ Gate 0.5: Dynamic Spread Anomaly Spike Guard (>= 1.6x Avg) ║
+     ║ 🛡️ Gate 1: Hard Macro Trend Lock (H1 / M15 / M5 Confluence)   ║
+     ║ 🛡️ Gate 1.5: Key Level 24H Liquidity Guard (No PDH/PDL Chasing)║
+     ║ 🛡️ Gate 2: Gaussian HMM 3-State Anti-Chop Machine Learning   ║
+     ╚═══════════════════════════════════════════════════════════════╝
                    │
-   [Cross-Symbol Correlation Guard]
-   (Blocks Over-Concentrated Currency Risk)
+                   ▼
+     [Cross-Symbol Correlation & News Guard]
+     ├─ Portfolio Correlation Guard (Max 1 Concurrent Gold Position)
+     └─ Live Economic News Blackout (30m Before / 15m After USD High-Impact)
                    │
-    [Live Economic News Blackout]
-    (Auto-Halt Orders on High-Impact Events)
-                   │
-      [Risk & Guardrail Manager]
-      ├─ Strict Max 1 Position Per Symbol
-      ├─ Volatility-Parity Lot Sizing (FX & Gold)
-      ├─ Cent Account Auto-Scaling (USC / USD)
-      ├─ Tick Velocity / TPS Spike Guard
-      ├─ Spread Anomaly Baseline Filter
-      ├─ Daily Drawdown Circuit Breaker (5%)
-      └─ Auto Daily Profit Target Lock (5% / 50 USC)
+                   ▼
+     [Risk & Guardrail Manager]
+     ├─ Small-Capital Adaptive Lot Sizing (0.01 - 0.10 Micro / 0.05 - 1.00 Cent)
+     ├─ Dynamic Margin Safety Buffer Check
+     ├─ Daily Drawdown Circuit Breaker (5% Equity Protection)
+     └─ Daily Profit Target Lock (Auto Anti-Greed Sleep)
                    │
               orderCh (32)
                    │
-    [Executor Dispatcher Worker Pool]
+     [Executor Dispatcher Worker Pool]
                    │
          ┌─────────┴─────────┐
          ▼                   ▼
    [Mock Broker]    [MT5 Broker Adapter]
    (Simulation)              │ (REQ-REP 5555 TCP)
                              ▼
-                    [MT5_Bridge.mq5 v2.20 (EA)]
+                    [MT5_Bridge.mq5 (EA)]
 
 ─────────────────────────────────────────────────────────────────────────────
-[Real-Time Control Center & Analytics] (http://127.0.0.1:8080)
-  ├─ TradingView Lightweight Candlestick Charts (Multi-Timeframe 15S / 1M / 5M)
-  ├─ Interactive Hover Crosshair OHLC Legend & Real-Time Clock
-  ├─ 60 FPS Auto-Scaling Canvas Equity & Realized PnL Curve
-  ├─ Dynamic Mode Switcher (🌿 SANTAI | ⚖️ BALANCED | 🔥 AGRESIF)
-  ├─ Dynamic Market Focus (🌐 ALL | 🪙 GOLD ONLY | 💵 FOREX ONLY)
-  ├─ Performance & Trade Analytics Tab (Win Rate, Profit Factor, Realized R:R)
-  ├─ Completed Trades Audit Log Table with Instant CSV Export
-  ├─ 2-Way Interactive Telegram Remote Control Bot (Inline Buttons)
-  └─ Atomic State Controls (🚨 Emergency Kill-Switch & Dynamic AI Toggle)
+[Real-Time Control Center & Mobile Operations]
+  ├─ Web Dashboard (Linear Minimalist Dark Theme v4.7 @ http://127.0.0.1:8080)
+  │   ├─ Local Offline TradingView Lightweight Candlestick Charts (Instant Backfill)
+  │   ├─ Interactive GitHub-Style Monthly P&L Commit Calendar & Hourly Heatmap
+  │   ├─ Pro Quant Market Hero Card (Order Depth BID/ASK & 24H Range Bar)
+  │   ├─ Visual Execution Markers on Candlesticks & Web Audio Victory Chime
+  │   └─ Real System Health Telemetry (TCP Health, Ticks Processed, 0 B/op RAM)
+  └─ 2-Way Interactive Telegram Remote Control Bot
+      ├─ Instant Rich Alerts: Entry, TP Hit, SL Hit, Daily Target Achieved
+      ├─ Remote Slash Commands: /status, /today, /quote, /pause, /resume, /closeall
+      └─ Inline Interactive Keyboard Controls (Real-Time Mode & State Switching)
 ```
 
 ---
 
 ## 💎 Fitur Unggulan & Pilar Kuantitatif
 
-### 1. 🧠 Arsitektur AI & Machine Learning (`internal/ai/`, `internal/ai/hmm/`)
+### 1. 🧠 5-Layer Institutional Defense Gate System
+Sebelum sinyal teknikal dieksekusi ke pasar, sinyal wajib lolos dari 5 lapis gerbang pertahanan:
 
-#### Gaussian Hidden Markov Model (HMM) — Inti Deteksi Regime
-Engine utama pengambilan keputusan: 3-State Gaussian HMM yang berjalan **36 ns/op** dengan **0 B/op heap allocation** sepenuhnya di CPU stack.
+1. **Gate 0: London Open Trap Blackout (14:00 – 14:45 WIB)**  
+   Berdasarkan audit empiris, jam 14:00 WIB adalah jendela manipulasi *Judas Swing* bank-bank Eropa yang menyumbang 80% kekalahan trader retail. Bot membekukan pesanan baru pada rentang waktu ini.
+2. **Gate 0.5: Dynamic Spread Anomaly Spike Guard**  
+   Memonitor *moving average* spread Exness secara waktu nyata. Jika spread mendadak melonjak $\ge 1.6\times$ dari baseline normal, bot membekukan entri untuk mencegah kerugian akibat *slippage*.
+3. **Gate 1: Hard Macro Trend Lock (H1 / M15 / M5 Hierarchical Confluence)**  
+   Aturan mutlak tren: **Dilarang BUY saat tren makro Bearish, dan dilarang SELL saat tren makro Bullish**. Mengeliminasi 100% entri melawan arus besar.
+4. **Gate 1.5: Key Level 24H Liquidity Guard (Anti-Pucuk & Anti-Lembah)**  
+   Mencegah pembelian di pucuk tertinggi 24 jam (*Previous Day High / PDH*) atau penjualan di dasar jurang (*Previous Day Low / PDL*) jika jarak harga terlalu dekat ($< 0.35\times \text{ATR}$).
+5. **Gate 2: Gaussian Hidden Markov Model (HMM) Anti-Chop**  
+   Model matematika 3-state HMM (**36 ns/op, 0 B/op**) mendeteksi cuaca pasar:
+   - `NOISE_IDLE / StateNoise`: 100% order diblokir (pasar sideways/chop).
+   - `BULL_EXPANSION`: Hanya mengizinkan BUY dengan confidence $\ge 55\%$.
+   - `BEAR_EXPANSION`: Hanya mengizinkan SELL dengan confidence $\ge 55\%$.
 
-- **3 Observation Features per candle M1**:
-  - `LogReturn` = `ln(Close_t / Close_{t-1})` — arah pergerakan harga
-  - `RelATR` = `ATR / Close` — volatilitas relatif
-  - `VolumeImbalance` = `(BuyVol - SellVol) / TotalVol` — dominansi beli/jual, clamp [-1,+1]
+---
 
-- **3 Regime States**:
-  | State | Kondisi Pasar | Aksi Trading |
-  |-------|--------------|--------------|
-  | `NOISE_IDLE` | Sideways / random walk | 🚫 100% IDLE — Semua order diblokir |
-  | `BULL_EXPANSION` | Momentum bullish + buyer dominance | ✅ BUY saja (conf ≥ 70%) |
-  | `BEAR_EXPANSION` | Momentum bearish + seller dominance | ✅ SELL saja (conf ≥ 70%) |
+### 2. 🎯 Institutional Pullback Retest Engine (`internal/strategy/momentum.go`)
+Menggantikan strategi breakout retail konvensional dengan eksekusi berbasis *Value Area*:
+* **Anti-Overextension Guard:** Sinyal dibatalkan jika harga sudah melompat $> 0.40\times \text{ATR}$ menjauhi Fast EMA. Bot dilarang mengejar harga yang sudah kabur.
+* **Value Area Testing:** Order SELL hanya sah jika harga memantul naik menguji area resisten Fast/Slow EMA (`High >= FastEMA - 0.15*ATR`). Order BUY hanya sah jika harga turun menguji area support.
+* **Rejection Wick Confirmation:** Lilin M5 wajib memiliki sumbu penolakan harga (*rejection wick*) minimal $\ge 20\%$ dari total rentang lilin, membuktikan kegagalan dorongan lawan dan dimulainya dorongan institusi.
 
-- **MinConfidence per Mode Trading**:
-  | Mode | Min Conf (Trend) | Min Conf (Range) |
-  |------|-----------------|-----------------|
-  | 🌿 SANTAI | 80% | 70% |
-  | ⚖️ BALANCED | 70% | 60% |
-  | 🔥 AGRESIF | 40% | 45% |
+---
 
-#### Guard Layers AI
-- **Macro Trend Guard (M5/M15)**: Sinyal BUY diblokir jika M5/M15 bearish, sinyal SELL diblokir jika M5/M15 bullish.
-- **Anti-Pucuk Guard**: BUY diblokir jika `upperWick > 30%` atau `RSI > 68`.
-- **Anti-Lembah Guard**: SELL diblokir jika `lowerWick > 30%` atau `RSI < 32`.
-- **Anti-Duplicate Signal Guard**: Guard `candleClosedThisTick` mencegah duplikasi sinyal OnTick + OnCandle pada penutupan M1 yang sama.
+### 3. 🛡️ Structure-Based Invalidation Stop Loss
+* Tidak menggunakan Stop Loss statis atau jarak pips sembarangan.
+* Stop Loss diletakkan **di luar Swing Extreme 5 lilin M5 terakhir + buffer \$0.50**:
+  - **SELL:** Stop Loss diletakkan di atas Swing High lokal.
+  - **BUY:** Stop Loss diletakkan di bawah Swing Low lokal.
+* **Volatility Floor & Ceiling:** Jarak SL struktural dibatasi lantai pengaman minimal **\$3.50** (agar tahan terhadap sumbu likuiditas normal) dan plafon maksimal **\$6.50** (pembatas risiko modal).
+* **Guaranteed RRR:** Target Take Profit otomatis dikunci minimal **$2.2\times$ dari jarak risiko**.
 
-### 2. 🎯 Dual-Strategy Engine (`internal/strategy/`)
+---
 
-#### Momentum Scalper (Trend Hunter)
-Sinyal entry berdasarkan 4 kondisi:
-1. **Golden Cross**: `prevFast ≤ prevSlow → fastEMA > slowEMA` + RSI < 70 + anti-extension 1.5x ATR
-2. **Death Cross**: `prevFast ≥ prevSlow → fastEMA < slowEMA` + RSI > 30 + anti-extension
-3. **Pullback BUY**: Established uptrend + price dips into FastEMA zone + bullish close + RSI 38–68
-4. **Rally SELL**: Established downtrend + price rallies into FastEMA zone + bearish close + RSI 32–62
+### 4. 🌊 Multi-Stage Dynamic Profit Locker (Anti-Choking)
+Sistem pengunci keuntungan bertingkat yang telah dikalibrasi dengan **napas longgar** agar posisi tidak mati kecekik (*premature choking*) oleh koreksi Fibonacci 38.2% – 50%:
 
-#### Mean-Reversion Range Scalper (Sideways Session)
-- **BUY**: `candle.Low ≤ BB.Lower` atau `%B ≤ 0.15` **AND** `RSI ≤ 38`
-- **SELL**: `candle.High ≥ BB.Upper` atau `%B ≥ 0.85` **AND** `RSI ≥ 62`
-- **Bandwidth Guard**: Hanya aktif saat `bbBandwidth ≤ 0.005` (pasar ranging/sempit)
+| Tahap Pengunci | Ambang Batas Trigger | Jarak Kunci Stop Loss | Karakteristik & Perlindungan |
+| :--- | :---: | :---: | :--- |
+| **Fase Napas Awal** | Floating Profit $0 – \$5.00$ | Structure SL Asli | Posisi diberi napas leluasa berayun di balik Swing Extreme. Koreksi normal \$2–\$3 tidak akan menyentuh SL. |
+| **Stage 1 (Break-Even)** | Profit $\ge 1.5\times \text{ATR}$ (Min **\$5.00**) | Entry $\pm \$0.20$ (Impas) | SL ditarik ke Break-Even setelah harga benar-benar melesat. Posisi **100% bebas risiko**. |
+| **Stage 2 (50% Lock)** | Profit $\ge 2.0\times \text{ATR}$ (Min **\$7.50**) | Mengunci **50% Profit** | Minimal **+\$3.50 cuan bersih pasti masuk kantong**, menyisakan ruang napas \$4.00 untuk ayunan harga. |
+| **Stage 3 (75% Runner)** | Profit $\ge 2.8\times \text{ATR}$ (Min **\$10.50**) | Mengunci **75% Profit** | Mengunci **+\$7.50 pasti**, mengawal sisa pips melesat menuju Take Profit penuh (\$15 – \$25)! |
 
-### 3. 🛡️ Institutional Risk Management (`internal/risk/`, `internal/executor/`)
+---
 
-#### Lot Sizing Formula (ATR-Proportional)
-```
-riskAmount     = equity × riskPerTrade         // 900 USC × 0.5% = 4.50 USC per trade
-atrPips        = ATR × pipMultiplier
-pipValuePerLot = PipValue(symbol, 1.0)
-lots           = riskAmount / (atrPips × pipValuePerLot)
-lots           = clamp(lots, minLot=0.01, maxLot=0.01)  // Fixed 0.01 lot untuk 900 USC
-```
+### 5. 🔌 MetaTrader 5 Native TCP IPC Bridge (`bridge/MT5_Bridge.mq5`)
+* **Port 5555 (REQ-REP):** Eksekusi order fisik MT5 (`BUY`, `SELL`, `CLOSE`, `MODIFY`, `POSITIONS`, `ACCOUNT`, `HISTORY`, `CANDLES`).
+* **Port 5556 (PUB-SUB):** Streaming data tick pasar real-time berlatensi ultra-rendah format JSON.
+* **Instant Historical Backfill:** Saat startup, Go mengirim perintah `CANDLES` ke EA MT5 yang langsung menarik 100 bar lilin M5 historis via MQL5 `CopyRates` untuk *warm-up* indikator dalam 2 detik.
+* **Physical Position Modification:** Perintah trailing dan Break-Even secara fisik memperbarui level SL/TP di server broker Exness.
+* **Partial Close Ready:** Mendukung penutupan volume lot parsial via `PositionClosePartial`.
 
-#### Guard Chain Risk Manager
-| Guard | Kondisi | Error |
-|-------|---------|-------|
-| 0 | Market/session filter | ErrFilterRejected |
-| 2 | Circuit breaker open | ErrCircuitOpen |
-| 3 | DailyPnL loss ≥ 5% equity | ErrDailyDrawdownHit |
-| 3b | DailyPnL profit ≥ 50 USC | ErrDailyProfitTargetReached |
-| 4 | Open positions ≥ 2 | ErrMaxPositionsOpen |
-| 4b | Symbol positions ≥ 1 | Reject: symbol sudah ada posisi |
-| 5 | Spread > maxSpread (Gold: 60 pip, JPY: 3.5 pip, FX: 2 pip) | ErrSpreadTooWide |
+---
 
-#### Position Lifecycle (per-tick OnTick steps)
-| Step | Guard | Trigger |
-|------|-------|---------|
-| 1 | P&L calc | Setiap tick |
-| 2 | Time-Stop | elapsed ≥ 35 menit → AUTO CLOSE |
-| 3 | Partial TP1 | pnlPips ≥ 5.0 pips (opsional, saat ini off) |
-| 4 | Break-Even | pnlPips ≥ 8.0 pips → SL ke Entry+1pip |
-| 5 | Trailing Stop | New HWM → ratchet SL (12 pips fixed / 1.5×ATR) |
-| 6 | SL Hit | Bid/Ask crosses StopLoss |
-| 7 | TP Hit | Bid/Ask crosses TakeProfit |
+### 6. 📱 2-Way Interactive Telegram Remote Control (`internal/notifier/telegram_bot.go`)
+Kontrol operasional *hands-free* langsung dari aplikasi Telegram ponsel Anda:
+* **Rich Notifications:** Kartu notifikasi detail pembukaan posisi, penutupan TP/SL, dan pencapaian target harian.
+* **Slash Commands:**
+  - `/status` — Ringkasan metrik live: Net Equity, Balance, Floating P&L, posisi aktif, harga Gold, spread, dan status HMM.
+  - `/today` — Laporan performa sesi hari ini: Win rate, total pips, dan rincian 5 transaksi terbaru.
+  - `/quote` — Kuotasi harga live Gold Bid/Ask, spread, dan 24H Range.
+  - `/pause` — Membekukan izin buka posisi baru tanpa mematikan bot (*Order Freeze*).
+  - `/resume` — Mengaktifkan kembali bot ke status *Live Trading*.
+  - `/closeall` — Tombol darurat (*Emergency Kill Switch*) untuk menutup seluruh posisi aktif di broker.
+* **Inline Keyboard Buttons:** Tombol sekali klik di bawah setiap pesan untuk navigasi cepat.
 
-#### Gold-Specific Calibration
-| Parameter | Nilai | Keterangan |
-|-----------|-------|-----------|
-| MinSLDistance | $0.50 | Minimum SL distance |
-| MinTPDistance | $1.00 | Minimum TP distance |
-| **MaxSL Hard-Cap** | **$1.50** | Pipeline cap — ATR tidak boleh melebihi ini |
-| MaxTPDistance | $3.00 | Maximum TP cap |
-| StagnantMinutes | 8 menit | Exit lebih cepat dari Gold stagnan |
+---
 
-### 4. 🌐 Multi-Symbol Portfolio & Correlation Guard (`internal/portfolio/`)
-- Proses multi-pair bersamaan tanpa *lock contention* per pipeline.
-- **Correlation Guard**: Blokir posisi kumulatif pada pair berkorelasi (EURUSD + GBPUSD).
-- Suffix broker otomatis: `EURUSDc`, `XAUUSDc`, `EURUSD.m`, `XAUUSD.pro`.
-
-### 5. 🔌 MetaTrader 5 Native TCP IPC Bridge
-- **Port 5555 (REQ-REP)**: Eksekusi order (BUY/SELL/CLOSE/POSITIONS/ACCOUNT/HISTORY).
-- **Port 5556 (PUB-SUB)**: Streaming tick berkecepatan tinggi JSON.
-- Latensi round-trip: **24.6 µs**. Dual-attempt execution: attempt 1 BUY+SL/TP, attempt 2 jika broker tolak SL → market open + PositionModify.
-
-### 6. 💾 Disk Persistence Layer (`internal/storage/`)
-- `data/trade_history.json` — seluruh riwayat transaksi selesai.
-- `data/daily_state.json` — status profit harian & circuit breaker.
-- Auto-load saat restart, anti-duplikasi tiket, 1-to-1 parity dengan tab History MT5.
-
-### 7. 🎛️ Control Center Web Dashboard (`internal/web/`, `web/`)
-- TradingView Lightweight Charts, multi-timeframe (15S/1M/5M), crosshair hover OHLC.
-- Analytics tab: Win Rate, Profit Factor, Gross P&L, Realized R:R, per-symbol breakdown.
-- Mode & Focus switcher real-time via WebSocket.
-
-### 8. 📱 Telegram Remote Control Bot (`internal/notifier/`)
-- Notifikasi instan: trade buka/tutup, TP/SL hit, circuit breaker.
-- Remote: ganti mode, ganti fokus, status akun, Emergency Close All.
+### 7. 🖥️ Linear Minimalist Web Dashboard v4.7 (`web/`)
+Antarmuka pemantauan berbasis web dengan estetika modern bergaya Linear / Vercel:
+* **Local Offline TradingView Charts:** Menggunakan bundle lokal `lightweight-charts.js` (160 KB), rendering chart 100% independen tanpa ketergantungan CDN internet luar.
+* **Trade Execution Pins:** Penanda visual grafis otomatis di atas lilin chart (`🎯 ENTRY BUY` dan `🏆 TP HIT`).
+* **Web Audio Victory Chime:** Membunyikan denting lonceng kemenangan (*arpeggio victory chime*) otomatis setiap kali posisi menyentuh Take Profit.
+* **Interactive Monthly P&L Calendar:** Kalender laba-rugi bulanan interaktif bergaya GitHub Commit Heatmap dengan total mingguan dan filter tanggal klik.
+* **Real System Health Telemetry:** Menampilkan data nyata status TCP 5555/5556, total tick yang diproses mesin, spread gate live vs limit 35p, dan konsumsi memori Go heap (0 B/op).
 
 ---
 
 ## 📊 Hasil Benchmark Performa CPU & Memori
 
-| Modul & Fungsi | Latensi Eksekusi | Alokasi Memori |
-|---|---|---|
-| **EMA Indicator Update** | **5.02 ns/op** | **0 B/op** |
-| **RSI Indicator Update** | **6.84 ns/op** | **0 B/op** |
-| **ATR Indicator Update** | **8.19 ns/op** | **0 B/op** |
-| **Gaussian HMM Update** | **36 ns/op** | **0 B/op** |
-| **AI GBDT Decision Tree** | **15.49 ns/op** | **0 B/op** |
-| **Portfolio Correlation Guard** | **18.20 ns/op** | **0 B/op** |
-| **Tick RingBuffer Push** | **26.71 ns/op** | **0 B/op** |
-| **Position Tracker OnTick** | **120.60 ns/op** | **0 B/op** |
-| **AI 12-Feature Extractor** | **138.50 ns/op** | **0 B/op** |
-| **MT5 IPC Round-Trip** | **24.60 µs/op** | Minimal TCP I/O |
+Semua modul inti diuji menggunakan Go Benchmark toolchain:
+
+| Modul & Fungsi | Latensi Eksekusi | Alokasi Memori Heap | Keterangan |
+| :--- | :---: | :---: | :--- |
+| **EMA Indicator Update** | **5.02 ns/op** | **0 B/op** (0 allocs) | Single-precision float ops |
+| **RSI Indicator Update** | **6.84 ns/op** | **0 B/op** (0 allocs) | Wilder's smoothing algorithm |
+| **ATR Indicator Update** | **8.19 ns/op** | **0 B/op** (0 allocs) | True range circular window |
+| **Gaussian HMM Update** | **36.00 ns/op** | **0 B/op** (0 allocs) | 3-state forward evaluation |
+| **Tick RingBuffer Push** | **26.71 ns/op** | **0 B/op** (0 allocs) | Lock-free circular ring buffer |
+| **Position Tracker OnTick** | **120.60 ns/op** | **0 B/op** (0 allocs) | Multi-Stage Profit Locker evaluation |
+| **MT5 IPC Round-Trip** | **24.60 µs/op** | Minimal TCP I/O | Dual native socket loopback |
 
 ---
 
 ## 📁 Struktur Direktori Proyek
 
-```
-Project Scalping/
-├── SYSTEM_ANALYSIS_EXPORT.md          # Audit teknis lengkap: logika kode, formula, flowchart
-├── go.mod                              # Definisi module Go & dependensi
-├── go.sum                              # Checksum integritas paket
-├── Makefile                            # Target build, test, dan run
-├── bin/
-│   ├── scalpbot.exe                    # Bot trading utama & server web dashboard
-│   └── backtester.exe                  # High-speed historical tick backtester
+```text
+ScalpBot-OS/
+├── go.mod                              # Definisi modul Go (github.com/pompbot/scalpbot)
+├── go.sum                              # Checksum integritas dependensi
+├── Makefile                            # Target otomatis build, test, dan run
+├── .gitignore                          # Sanitasi biner, data transaksi, dan kredensial
+├── .env.example                        # Template environment variables
+├── README.md                           # Dokumentasi komprehensif arsitektur sistem
 ├── bridge/
-│   ├── MT5_Bridge.mq5                  # Expert Advisor jembatan native TCP untuk MT5
-│   └── MT5_Bridge.ex5                  # Biner terkompilasi EA MT5
+│   └── MT5_Bridge.mq5                  # Expert Advisor jembatan native dual TCP untuk MT5
 ├── cmd/
-│   ├── bot/main.go                     # Multi-symbol orchestrator, web server, & sync loops
-│   └── backtest/main.go                # CLI engine untuk backtest historis
+│   ├── bot/main.go                     # Entry point bot, pipeline multi-symbol, & web server
+│   └── backtest/main.go                # CLI engine untuk pengujian backtest historis
 ├── config/
-│   ├── config.go                       # Struct parser YAML & environment overrides
-│   └── default.yaml                    # Konfigurasi parameter trading & risk management
+│   ├── config.go                       # Parser konfigurasi Go & struct defaults
+│   └── default.yaml                    # Konfigurasi parameter strategi, risiko, & session
 ├── data/
-│   ├── trade_history.json              # Database permanen transaksi selesai
-│   └── daily_state.json                # Status profit harian & circuit breaker
+│   └── .gitkeep                        # Struktur folder data runtime transaksi
 ├── internal/
-│   ├── ai/
-│   │   ├── hmm/gaussian_hmm.go         # Gaussian HMM 3-State Engine (36 ns/op, 0 B/op)
-│   │   ├── features.go                 # Zero-alloc 12-feature extractor
-│   │   ├── regime.go                   # Market regime classifier
-│   │   ├── scorer.go                   # GBDT decision tree ensemble scorer
-│   │   └── filter.go                   # AI coordinator, gate routing, HMM bridge
-│   ├── backtest/                       # High-Speed Tick Backtester
-│   ├── broker/                         # Broker abstraction & MT5 TCP adapter
-│   ├── executor/
-│   │   ├── dispatcher.go               # Worker pool order execution
-│   │   └── tracker.go                  # Position Tracker (Trailing/BE/Stagnant Killer)
-│   ├── indicator/                      # EMA, RSI, ATR, Bollinger (streaming, 0-alloc)
-│   ├── marketdata/                     # RingBuffer & OHLCV Aggregator (M1/M5/M15)
-│   ├── model/                          # Domain: Tick, Candle, Order, Signal, Position
-│   ├── news/                           # Live Economic Calendar & News Blackout
-│   ├── notifier/                       # Telegram Interactive Bot & Webhook
-│   ├── portfolio/                      # Multi-Symbol Correlation Guard & Sizing
-│   ├── risk/                           # Risk Manager & Circuit Breakers
-│   ├── storage/                        # Thread-Safe Disk Persistence
-│   └── web/                            # WebSocket Hub & HTTP Server
-└── web/                                # Modern Glassmorphism Web Frontend
-    ├── index.html
-    ├── css/style.css                   # Deep Obsidian & Neon Glow design system
-    └── js/app.js                       # WebSocket client, TradingView, analytics renderer
+│   ├── ai/                             # SignalFilter, GBDT ensemble, & guard layers
+│   │   └── hmm/                        # Gaussian Hidden Markov Model 3-state core
+│   ├── backtest/                       # Simulator eksekusi historical backtesting
+│   ├── broker/                         # Abstraksi broker & mock simulator
+│   │   └── mt5/                        # Driver komunikasi IPC socket MetaTrader 5
+│   ├── executor/                       # PositionTracker, Multi-Stage Profit Locker, Dispatcher
+│   ├── indicator/                      # Zero-alloc EMA, RSI, SMA, ATR, Bollinger
+│   ├── marketdata/                     # RingBuffer, OHLCVAggregator, MultiTimeframe
+│   ├── model/                          # Domain models (Tick, Candle, Signal, Position)
+│   ├── news/                           # Live Economic Calendar & News Blackout Filter
+│   ├── notifier/                       # 2-Way Interactive Telegram Bot controller
+│   ├── portfolio/                      # Correlation Guard & Volatility Parity Sizer
+│   ├── risk/                           # Risk Manager, SessionFilter, SpreadAnomalyFilter
+│   ├── storage/                        # Disk persistence layer (JSON database)
+│   ├── strategy/                       # Institutional Momentum Scalper & Structure SL
+│   └── web/                            # WebSocket Hub & HTTP REST telemetry server
+└── web/
+    ├── index.html                      # Linear-style HUD dashboard interface
+    ├── css/
+    │   └── style.css                   # Dark theme, Glassmorphism, & responsive layout
+    └── js/
+        ├── app.js                      # WebSocket client, TV Chart controller, & sound FX
+        └── lightweight-charts.js       # Bundle lokal offline TradingView Lightweight Charts
 ```
 
 ---
 
-## 🛠️ Panduan Penggunaan & Instalasi
+## 🚀 Panduan Memulai (Quick Start)
 
-### 1. Kompilasi Binary Produksi
-```powershell
-$env:Path = "C:\Program Files\Go\bin;" + $env:Path
-go build -ldflags="-s -w" -o bin/scalpbot.exe ./cmd/bot/
-go build -ldflags="-s -w" -o bin/backtester.exe ./cmd/backtest/
+### 1. Prasyarat Sistem
+* **Sistem Operasi:** Windows 10 / 11 atau Windows Server VPS.
+* **Go Compiler:** Go 1.22 atau 1.23+ terpasang (`go version`).
+* **MetaTrader 5:** Terminal MT5 (disarankan broker dengan spread Gold ketat seperti Exness).
+
+### 2. Pemasangan Expert Advisor di MT5
+1. Buka MetaTrader 5, pilih menu **File** ➔ **Open Data Folder**.
+2. Masuk ke folder `MQL5/Experts/`, salin berkas `bridge/MT5_Bridge.mq5` ke dalam folder tersebut.
+3. Buka **MetaEditor** (tekan `F4`), buka berkas `MT5_Bridge.mq5`, lalu tekan **Compile** (`F7`) hingga menghasilkan `0 errors, 0 warnings`.
+4. Kembali ke terminal MT5, buka chart **XAUUSD** pada timeframe **M5**.
+5. Pastikan tombol **Algo Trading** di toolbar MT5 dalam posisi aktif (hijau).
+6. Tarik EA `MT5_Bridge` ke chart, centang opsi **Allow Algo Trading** dan **Allow DLL imports**, lalu klik **OK**.
+
+### 3. Konfigurasi & Menjalankan Bot
+Salin template konfigurasi dan sesuaikan kredensial Telegram Anda jika diperlukan:
+```bash
+# Kompilasi seluruh binary produksi
+make build
+
+# Jalankan pengujian unit test (memastikan seluruh modul lulus 100%)
+make test
+
+# Menjalankan bot di instrumen Gold Micro / Standard (Default 0.01 lot)
+./bin/scalpbot.exe -broker mt5 -symbols "XAUUSDm"
+
+# Menjalankan bot dengan ukuran lot kustom (misal: 0.05 lot)
+./bin/scalpbot.exe -broker mt5 -symbols "XAUUSDm" -lots 0.05
+
+# Menjalankan bot di akun Cent (Exness Cent XAUUSDc)
+./bin/scalpbot.exe -broker mt5 -symbols "XAUUSDc" -lots 0.10
 ```
 
-### 2. Pemasangan EA di MetaTrader 5
-1. MT5 → **File** → **Open Data Folder** → `MQL5/Experts/` → salin `bridge/MT5_Bridge.mq5`
-2. MetaEditor (F4) → buka `MT5_Bridge.mq5` → **Compile** (F7)
-3. Drag `MT5_Bridge` ke chart aktif → centang **"Allow Algo Trading"**
-4. Pastikan tombol **Algo Trading** di toolbar berwarna **hijau**
-
-### 3. Menjalankan ScalpBot
-```powershell
-.\bin\scalpbot.exe -broker mt5 -symbols "EURUSDc,GBPUSDc,USDJPYc,XAUUSDc"
-```
-Buka dashboard: **`http://127.0.0.1:8080`**
-
-### 4. Menjalankan Seluruh Unit Test Suite
-```powershell
-go test ./...                          # Seluruh unit test (19 packages, 100% PASS)
-go test -bench=. -benchmem ./internal/ # Benchmark alokasi memori
-go test -v ./internal/ai/hmm/...       # Test HMM spesifik dengan verbose
-```
+Buka peramban web Anda di **`http://127.0.0.1:8080`** untuk mengakses Web Dashboard kontrol penuh secara waktu nyata.
 
 ---
 
-## ⚙️ Variabel Lingkungan & Konfigurasi
+## ⚖️ Lisensi & Penafian Risiko
 
-| Variabel | Default | Keterangan |
-|---|---|---|
-| `SCALP_SYMBOL` | `EURUSD` | Simbol default |
-| `SCALP_BROKER_TYPE` | `mt5` | `mock` atau `mt5` |
-| `SCALP_MT5_CMD` | `127.0.0.1:5555` | Socket REQ-REP order |
-| `SCALP_MT5_STREAM` | `127.0.0.1:5556` | Socket PUB tick stream |
-| `SCALP_WEB_PORT` | `8080` | Port HTTP dashboard |
-| `SCALP_AI_ENABLED` | `true` | Filter AI HMM aktif |
-| `SCALP_TG_TOKEN` | — | Token Bot Telegram |
-| `SCALP_TG_CHAT` | — | Chat ID Telegram |
-
----
-
-## 📄 Lisensi & Disclaimer
-
-Perangkat lunak ini dikembangkan untuk keperluan riset trading kuantitatif institusional. Selalu lakukan pengujian mendalam pada akun demo dan backtesting historis sebelum menggunakan modal nyata. Past performance tidak menjamin hasil masa depan.
+Proyek ini dirancang untuk tujuan riset rekayasa perangkat lunak dan perdagangan kuantitatif berkecepatan tinggi. Perdagangan derivatif emas berdaya ungkit (*leveraged commodity CFD trading*) memiliki risiko finansial yang substansial. Selalu uji sistem secara menyeluruh pada akun demo sebelum mengalokasikan modal riil.

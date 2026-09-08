@@ -80,6 +80,10 @@ func (t *TelemetryTracker) RecordFill(order model.OrderRequest, fillPos model.Po
 
 	if len(t.records) < 1024 {
 		t.records = append(t.records, rec)
+	} else {
+		// Rolling FIFO eviction: drop oldest record, retain newest 1024
+		copy(t.records, t.records[1:])
+		t.records[len(t.records)-1] = rec
 	}
 }
 

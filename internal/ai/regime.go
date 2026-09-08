@@ -78,7 +78,7 @@ func (rc *RegimeClassifier) Classify(fv FeatureVector) (MarketRegime, float64) {
 	absEMADelta := math.Abs(emaDelta)
 	absRSINorm := math.Abs(rsiNorm)
 
-	if absEMADelta < rc.chopSpreadThreshold || absRSINorm < rc.chopRSIBand {
+	if absEMADelta < rc.chopSpreadThreshold && absRSINorm < rc.chopRSIBand {
 		chopScore := (1.0 - (absEMADelta / rc.chopSpreadThreshold)) * 0.5 +
 			(1.0 - (absRSINorm / rc.chopRSIBand)) * 0.5
 		return RegimeRangingChop, math.Min(1.0, math.Max(0.5, chopScore))

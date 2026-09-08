@@ -16,7 +16,7 @@ import (
 // Configurable fill latency and slippage for realistic simulation.
 type MockBroker struct {
 	fillLatency time.Duration // Simulated execution latency
-	slippagePct float64       // Slippage as fraction (e.g., 0.0001 = 1 pip on EURUSD)
+	slippagePct float64       // Slippage as fraction (e.g., 0.00005 = 0.5 pips on XAUUSD)
 	rejectRate  float64       // Probability of order rejection [0.0, 1.0]
 	orderSeq    atomic.Int64  // Atomic counter for unique order IDs
 	mu          sync.Mutex
@@ -96,5 +96,17 @@ func (mb *MockBroker) Execute(ctx context.Context, order model.OrderRequest) (mo
 // Close simulates closing a position.
 func (mb *MockBroker) Close(_ context.Context, positionID string) error {
 	log.Printf("[mock-broker] closed position: %s", positionID)
+	return nil
+}
+
+// ClosePartial simulates closing a portion of a position.
+func (mb *MockBroker) ClosePartial(_ context.Context, positionID string, lots float64) error {
+	log.Printf("[mock-broker] partially closed position: %s lots=%.2f", positionID, lots)
+	return nil
+}
+
+// ModifyPosition simulates updating SL and TP on an active position.
+func (mb *MockBroker) ModifyPosition(_ context.Context, positionID string, sl, tp float64) error {
+	log.Printf("[mock-broker] modified position %s: SL=%.5f TP=%.5f", positionID, sl, tp)
 	return nil
 }

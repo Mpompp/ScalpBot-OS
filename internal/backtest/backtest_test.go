@@ -45,7 +45,7 @@ func TestParseTickLineBytes(t *testing.T) {
 func TestSyntheticGenerator(t *testing.T) {
 	cfg := DefaultSyntheticConfig()
 	count := 5000
-	ticks := GenerateSyntheticTicks(count, "EURUSD", cfg)
+	ticks := GenerateSyntheticTicks(count, "XAUUSD", cfg)
 
 	if len(ticks) != count {
 		t.Fatalf("expected %d ticks, got %d", count, len(ticks))
@@ -117,7 +117,7 @@ func TestCalculateMetrics(t *testing.T) {
 
 func TestBacktestEngine_Run(t *testing.T) {
 	synthCfg := DefaultSyntheticConfig()
-	ticks := GenerateSyntheticTicks(10000, "EURUSD", synthCfg)
+	ticks := GenerateSyntheticTicks(10000, "XAUUSD", synthCfg)
 
 	engineCfg := DefaultEngineConfig()
 	engine := NewEngine(engineCfg)

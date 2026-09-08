@@ -124,3 +124,35 @@ func TestMomentumScalper_LimitPullback(t *testing.T) {
 	}
 }
 
+func TestMomentumScalper_StructureSLTP(t *testing.T) {
+	// 1. Test Gold SELL with swing high at 4405.00, entry at 4402.00, ATR=3.0
+	// SL should be 4405.00 + 0.50 = 4405.50 (risk = 3.50, minSL=3.60 clamped)
+	sl, tp := computeStructureSLTP("XAUUSDm", 4402.00, 3.0, 4405.00, false)
+	if sl <= 4402.00 {
+		t.Fatalf("expected SL above entry for SELL, got %f", sl)
+	}
+	if sl < 4405.50 {
+		t.Fatalf("expected SL at or above swing high + buffer (4405.50), got %f", sl)
+	}
+	if tp >= 4402.00 {
+		t.Fatalf("expected TP below entry for SELL, got %f", tp)
+	}
+	risk := sl - 4402.00
+	reward := 4402.00 - tp
+	if reward < risk*2.0 {
+		t.Fatalf("expected reward >= 2.0x risk, got reward=%f, risk=%f", reward, risk)
+	}
+
+	// 2. Test Gold BUY with swing low at 4400.00, entry at 4403.00, ATR=3.0
+	slBuy, tpBuy := computeStructureSLTP("XAUUSDm", 4403.00, 3.0, 4400.00, true)
+	if slBuy >= 4403.00 {
+		t.Fatalf("expected SL below entry for BUY, got %f", slBuy)
+	}
+	if slBuy > 4399.50 {
+		t.Fatalf("expected SL at or below swing low - buffer (4399.50), got %f", slBuy)
+	}
+	if tpBuy <= 4403.00 {
+		t.Fatalf("expected TP above entry for BUY, got %f", tpBuy)
+	}
+}
+

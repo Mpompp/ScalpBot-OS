@@ -36,6 +36,8 @@ type TelemetryPayload struct {
 	AccountCurrency     string                       `json:"account_currency"`
 	Performance         *PerformanceTelemetry        `json:"performance,omitempty"`
 	LiveCandles         map[string][]CandleTelemetry `json:"live_candles,omitempty"`
+	TotalTicksProcessed int64                        `json:"total_ticks_processed,omitempty"`
+	MemoryAllocMB       float64                      `json:"memory_alloc_mb,omitempty"`
 }
 
 type CandleTelemetry struct {
@@ -58,6 +60,8 @@ type TradeRecordTelemetry struct {
 	Pips      float64 `json:"pips"`
 	Duration  string  `json:"duration"`
 	CloseTime string  `json:"time"`
+	Date      string  `json:"date,omitempty"`
+	Timestamp int64   `json:"timestamp,omitempty"`
 	MFEUSD    float64 `json:"mfe_usd,omitempty"`
 	MAEUSD    float64 `json:"mae_usd,omitempty"`
 	MFEPips   float64 `json:"mfe_pips,omitempty"`
@@ -102,6 +106,7 @@ type PositionTelemetry struct {
 	FloatingPips       float64 `json:"floating_pips"`
 	HoldingTimeSec     int64   `json:"holding_time_sec"`
 	PartialTPTriggered bool    `json:"partial_tp_triggered"`
+	ProfitStage        int     `json:"profit_stage,omitempty"`
 	MFEUSD             float64 `json:"mfe_usd,omitempty"`
 	MAEUSD             float64 `json:"mae_usd,omitempty"`
 	MFEPips            float64 `json:"mfe_pips,omitempty"`
@@ -115,8 +120,8 @@ type SymbolData struct {
 	TPS          float64 `json:"tps"`
 	AIRegime     string  `json:"ai_regime"`
 	AIConf       float64 `json:"ai_conf"`
-	AssetClass   string  `json:"asset_class,omitempty"`   // "GOLD", "FOREX", "CRYPTO"
-	AssetIcon    string  `json:"asset_icon,omitempty"`    // "🪙", "💵", "⚡"
+	AssetClass   string  `json:"asset_class,omitempty"`   // "GOLD"
+	AssetIcon    string  `json:"asset_icon,omitempty"`    // "🪙"
 	LastSignal   string  `json:"last_signal,omitempty"`   // "BUY" or "SELL"
 	SignalStatus string  `json:"signal_status,omitempty"` // "APPROVED", "REJECTED", "IDLE", "SKIPPED"
 	SignalReason string  `json:"signal_reason,omitempty"` // "Ranging Chop (0%)", "Conf 45% < 65%", "Score 72%"
@@ -145,11 +150,14 @@ type SignalEvent struct {
 }
 
 type NewsTelemetry struct {
-	Title        string `json:"title"`
-	Currency     string `json:"currency"`
-	Impact       string `json:"impact"`
-	CountdownSec int64  `json:"countdown_sec"`
-	IsBlackout   bool   `json:"is_blackout"`
+	Title                string `json:"title"`
+	Currency             string `json:"currency"`
+	Impact               string `json:"impact"`
+	CountdownSec         int64  `json:"countdown_sec"`
+	IsBlackout           bool   `json:"is_blackout"`
+	EventTimeSec         int64  `json:"event_time_sec,omitempty"`
+	BlackoutEndSec       int64  `json:"blackout_end_sec,omitempty"`
+	BlackoutRemainingSec int64  `json:"blackout_remaining_sec,omitempty"`
 }
 
 // WSClient represents a single connected browser WebSocket with a buffered send channel.

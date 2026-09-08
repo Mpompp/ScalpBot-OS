@@ -61,7 +61,13 @@ type MomentumScalper struct {
 	prevFast     float64
 	prevSlow     float64
 	hasPrev      bool
-	fastHistory  []float64      // Last N Fast EMA values for slope measurement
+	fastHistory  [6]float64     // Circular buffer for Fast EMA values (0 allocs)
+	fastHistLen  int           // Count of stored values (capped at 6)
+	fastHistIdx  int           // Next write position
+	highHistory  [10]float64    // Circular buffer for recent candle highs (structure SL)
+	lowHistory   [10]float64    // Circular buffer for recent candle lows (structure SL)
+	candleCount  int           // Count of stored candles (capped at 10)
+	candleIdx    int           // Next write position for candles
 	atrSMA       *indicator.SMA // Baseline ATR over 50 bars
 	lastVolRatio float64        // Current ATR / Baseline ATR ratio
 	mu           sync.RWMutex
@@ -76,7 +82,6 @@ func NewMomentumScalper(id string, cfg MomentumScalperConfig) *MomentumScalper {
 		slow:         indicator.NewEMA(cfg.SlowEMAPeriod),
 		rsi:          indicator.NewRSI(cfg.RSIPeriod),
 		atr:          indicator.NewATR(cfg.ATRPeriod),
-		fastHistory:  make([]float64, 0, 8),
 		atrSMA:       indicator.NewSMA(50),
 		lastVolRatio: 1.0,
 	}
@@ -120,10 +125,19 @@ func (m *MomentumScalper) OnCandle(candle model.Candle) model.Signal {
 		return model.Signal{Type: model.NoSignal}
 	}
 
-	// Update Fast EMA history for multi-bar slope lookback
-	m.fastHistory = append(m.fastHistory, fastVal)
-	if len(m.fastHistory) > 6 {
-		m.fastHistory = m.fastHistory[len(m.fastHistory)-6:]
+	// Update Fast EMA history in circular buffer (0 allocs)
+	m.fastHistory[m.fastHistIdx] = fastVal
+	m.fastHistIdx = (m.fastHistIdx + 1) % 6
+	if m.fastHistLen < 6 {
+		m.fastHistLen++
+	}
+
+	// Update High & Low history in circular buffer (0 allocs)
+	m.highHistory[m.candleIdx] = candle.High
+	m.lowHistory[m.candleIdx] = candle.Low
+	m.candleIdx = (m.candleIdx + 1) % 10
+	if m.candleCount < 10 {
+		m.candleCount++
 	}
 
 	// Need previous EMA values to detect crossover
@@ -162,24 +176,28 @@ func (m *MomentumScalper) evaluateCrossover(
 		return noSignal
 	}
 
-	// Calculate Multi-Bar Fast EMA Slope (Lookback 2 bars)
+	// Calculate Multi-Bar Fast EMA Slope (Lookback 2 bars from circular buffer)
 	var fastSlope float64
-	if len(m.fastHistory) >= 3 {
-		fastSlope = fastVal - m.fastHistory[len(m.fastHistory)-3]
-	} else if len(m.fastHistory) >= 2 {
-		fastSlope = fastVal - m.fastHistory[len(m.fastHistory)-2]
+	if m.fastHistLen >= 3 {
+		// Index 3 bars ago in circular buffer
+		idx := (m.fastHistIdx - 3 + 6) % 6
+		fastSlope = fastVal - m.fastHistory[idx]
+	} else if m.fastHistLen >= 2 {
+		idx := (m.fastHistIdx - 2 + 6) % 6
+		fastSlope = fastVal - m.fastHistory[idx]
 	}
 
 	// 1. Bullish crossover: fast crosses above slow
 	if m.prevFast <= m.prevSlow && fastVal > slowVal {
 		// Multi-Bar Slope Guard: reject flat or declining crossover (whipsaw filter)
-		if len(m.fastHistory) >= 2 && fastSlope <= 0 {
+		if m.fastHistLen >= 2 && fastSlope <= 0 {
 			return noSignal
 		}
 		// RSI filter: not overbought (still room to run)
 		if rsiVal < m.cfg.RSIOverbought {
-			// Over-extension check: avoid chasing if price is already flying > 1.5x ATR above FastEMA
-			if candle.Close-fastVal > atrVal*1.5 {
+			// Over-extension check: avoid chasing if price is already extended > 0.40x ATR above FastEMA
+			// Force extended impulses to wait for healthy pullback re-entry (Condition 3)
+			if candle.Close-fastVal > atrVal*0.40 {
 				return noSignal
 			}
 
@@ -193,7 +211,8 @@ func (m *MomentumScalper) evaluateCrossover(
 				}
 			}
 
-			sl, tp := computeMomentumSLTP(candle.Symbol, entryPrice, atrVal, true)
+			swingLow := m.recentSwingLow(5)
+			sl, tp := computeStructureSLTP(candle.Symbol, entryPrice, atrVal, swingLow, true)
 			return model.Signal{
 				Type:        model.Buy,
 				Symbol:      candle.Symbol,
@@ -210,13 +229,14 @@ func (m *MomentumScalper) evaluateCrossover(
 	// 2. Bearish crossover: fast crosses below slow
 	if m.prevFast >= m.prevSlow && fastVal < slowVal {
 		// Multi-Bar Slope Guard: reject flat or rising crossover (whipsaw filter)
-		if len(m.fastHistory) >= 2 && fastSlope >= 0 {
+		if m.fastHistLen >= 2 && fastSlope >= 0 {
 			return noSignal
 		}
 		// RSI filter: not oversold (still room to fall)
 		if rsiVal > m.cfg.RSIOversold {
-			// Over-extension check: avoid chasing if price is already plunging > 1.5x ATR below FastEMA
-			if fastVal-candle.Close > atrVal*1.5 {
+			// Over-extension check: avoid chasing if price is already extended > 0.40x ATR below FastEMA
+			// Force extended breakdowns to wait for healthy rally pullback re-entry (Condition 3)
+			if fastVal-candle.Close > atrVal*0.40 {
 				return noSignal
 			}
 
@@ -230,7 +250,8 @@ func (m *MomentumScalper) evaluateCrossover(
 				}
 			}
 
-			sl, tp := computeMomentumSLTP(candle.Symbol, entryPrice, atrVal, false)
+			swingHigh := m.recentSwingHigh(5)
+			sl, tp := computeStructureSLTP(candle.Symbol, entryPrice, atrVal, swingHigh, false)
 			return model.Signal{
 				Type:        model.Sell,
 				Symbol:      candle.Symbol,
@@ -244,12 +265,23 @@ func (m *MomentumScalper) evaluateCrossover(
 		}
 	}
 
-	// 3. High-Probability Pullback Re-entry (Dip Buying on Uptrend & Rally Selling on Downtrend)
+	// 3. High-Probability Institutional Pullback Re-entry (Value Area Entry + Rejection Wick)
+	cRange := candle.High - candle.Low
+	if cRange <= 0 {
+		cRange = 0.01
+	}
+
 	if fastVal > slowVal && m.prevFast > m.prevSlow {
-		// Established Uptrend: Price tested near FastEMA zone and closed bullish
-		if candle.Low <= fastVal+atrVal*0.50 && candle.Close >= fastVal-atrVal*0.20 && candle.Close >= candle.Open {
-			if rsiVal >= 38.0 && rsiVal <= 68.0 {
-				sl, tp := computeMomentumSLTP(candle.Symbol, candle.Close, atrVal, true)
+		// Established Uptrend: Price tested near FastEMA support zone and rejected lower prices
+		lowerWick := math.Min(candle.Open, candle.Close) - candle.Low
+		testedSupport := candle.Low <= fastVal+atrVal*0.15
+		notExtended := candle.Close-fastVal <= atrVal*0.40
+		bullishRejection := (lowerWick >= 0.20*cRange) || (candle.Close > candle.Open && candle.Close >= fastVal-atrVal*0.20)
+
+		if testedSupport && notExtended && bullishRejection {
+			if rsiVal >= 40.0 && rsiVal <= 68.0 {
+				swingLow := m.recentSwingLow(5)
+				sl, tp := computeStructureSLTP(candle.Symbol, candle.Close, atrVal, swingLow, true)
 				return model.Signal{
 					Type:        model.Buy,
 					Symbol:      candle.Symbol,
@@ -263,10 +295,16 @@ func (m *MomentumScalper) evaluateCrossover(
 			}
 		}
 	} else if fastVal < slowVal && m.prevFast < m.prevSlow {
-		// Established Downtrend: Price tested near FastEMA zone and closed bearish
-		if candle.High >= fastVal-atrVal*0.50 && candle.Close <= fastVal+atrVal*0.20 && candle.Close <= candle.Open {
-			if rsiVal <= 62.0 && rsiVal >= 32.0 {
-				sl, tp := computeMomentumSLTP(candle.Symbol, candle.Close, atrVal, false)
+		// Established Downtrend: Price rallied into FastEMA resistance zone and rejected higher prices
+		upperWick := candle.High - math.Max(candle.Open, candle.Close)
+		testedResistance := candle.High >= fastVal-atrVal*0.15
+		notExtended := fastVal-candle.Close <= atrVal*0.40
+		bearishRejection := (upperWick >= 0.20*cRange) || (candle.Close < candle.Open && candle.Close <= fastVal+atrVal*0.20)
+
+		if testedResistance && notExtended && bearishRejection {
+			if rsiVal <= 60.0 && rsiVal >= 32.0 {
+				swingHigh := m.recentSwingHigh(5)
+				sl, tp := computeStructureSLTP(candle.Symbol, candle.Close, atrVal, swingHigh, false)
 				return model.Signal{
 					Type:        model.Sell,
 					Symbol:      candle.Symbol,
@@ -282,6 +320,50 @@ func (m *MomentumScalper) evaluateCrossover(
 	}
 
 	return noSignal
+}
+
+// recentSwingHigh finds the maximum candle high in the last lookback bars (0 heap allocs).
+func (m *MomentumScalper) recentSwingHigh(lookback int) float64 {
+	if m.candleCount == 0 {
+		return 0
+	}
+	n := lookback
+	if n > m.candleCount {
+		n = m.candleCount
+	}
+	maxH := -math.MaxFloat64
+	for i := 0; i < n; i++ {
+		idx := (m.candleIdx - 1 - i + 10) % 10
+		if m.highHistory[idx] > maxH {
+			maxH = m.highHistory[idx]
+		}
+	}
+	if maxH == -math.MaxFloat64 {
+		return 0
+	}
+	return maxH
+}
+
+// recentSwingLow finds the minimum candle low in the last lookback bars (0 heap allocs).
+func (m *MomentumScalper) recentSwingLow(lookback int) float64 {
+	if m.candleCount == 0 {
+		return 0
+	}
+	n := lookback
+	if n > m.candleCount {
+		n = m.candleCount
+	}
+	minL := math.MaxFloat64
+	for i := 0; i < n; i++ {
+		idx := (m.candleIdx - 1 - i + 10) % 10
+		if m.lowHistory[idx] < minL {
+			minL = m.lowHistory[idx]
+		}
+	}
+	if minL == math.MaxFloat64 {
+		return 0
+	}
+	return minL
 }
 
 // computeStrength returns a signal strength value in [0, 1] based on
@@ -345,23 +427,52 @@ func (m *MomentumScalper) VolRatio() float64 {
 	return m.lastVolRatio
 }
 
-func computeMomentumSLTP(symbol string, price, atrVal float64, isBuy bool) (sl, tp float64) {
+// computeStructureSLTP calculates a structure-based Stop Loss positioned beyond
+// recent swing extremes, plus a Take Profit guaranteeing at least 1:2.2 RRR.
+func computeStructureSLTP(symbol string, entryPrice, atrVal, swingExtreme float64, isBuy bool) (sl, tp float64) {
 	prof := model.DetectAssetClass(symbol)
-	slDist := atrVal * 1.5
-	tpDist := atrVal * 3.0
-
-	if prof.IsGold {
-		// Gold (XAUUSD): 1 pip = $0.01. Minimum SL wide enough to survive M15 swing volatility + spread.
-		slDist = math.Max(atrVal*1.5, 3.50) // $3.50 minimum SL (350 pips) to survive healthy retracements
-		tpDist = math.Max(slDist*2.5, 8.50)  // $8.50 minimum TP (2.5:1 RRR)
+	buffer := 0.50 // $0.50 buffer beyond swing extreme on Gold
+	if !prof.IsGold {
+		buffer = 5.0 / model.PipMultiplier(symbol)
 	}
+
+	minSL := math.Max(atrVal*1.2, 3.50) // Minimum $3.50 breathing room on Gold
+	maxSL := math.Max(atrVal*2.0, 6.50) // Maximum $6.50 risk cap on Gold
 
 	if isBuy {
-		sl = price - slDist
-		tp = price + tpDist
+		if swingExtreme > 0 && swingExtreme < entryPrice {
+			sl = swingExtreme - buffer
+		} else {
+			sl = entryPrice - minSL
+		}
+		riskDist := entryPrice - sl
+		if riskDist < minSL {
+			sl = entryPrice - minSL
+			riskDist = minSL
+		} else if riskDist > maxSL {
+			sl = entryPrice - maxSL
+			riskDist = maxSL
+		}
+		tp = entryPrice + math.Max(riskDist*2.2, 8.00)
 	} else {
-		sl = price + slDist
-		tp = price - tpDist
+		if swingExtreme > 0 && swingExtreme > entryPrice {
+			sl = swingExtreme + buffer
+		} else {
+			sl = entryPrice + minSL
+		}
+		riskDist := sl - entryPrice
+		if riskDist < minSL {
+			sl = entryPrice + minSL
+			riskDist = minSL
+		} else if riskDist > maxSL {
+			sl = entryPrice + maxSL
+			riskDist = maxSL
+		}
+		tp = entryPrice - math.Max(riskDist*2.2, 8.00)
 	}
 	return sl, tp
+}
+
+func computeMomentumSLTP(symbol string, price, atrVal float64, isBuy bool) (sl, tp float64) {
+	return computeStructureSLTP(symbol, price, atrVal, 0, isBuy)
 }

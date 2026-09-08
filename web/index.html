@@ -7,10 +7,10 @@
   <meta name="description" content="Ultra-low latency institutional quantitative trading control dashboard for ScalpBot with real-time WebSocket telemetry.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=2.7">
-  <!-- TradingView Lightweight Charts Library -->
-  <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css?v=4.7">
+  <!-- TradingView Lightweight Charts Library (Local Offline-Ready Bundle) -->
+  <script src="js/lightweight-charts.js"></script>
 </head>
 <body>
   <div class="app-container">
@@ -52,10 +52,10 @@
 
       <!-- GOLD EXCLUSIVE & ACCOUNT BADGE -->
       <div class="focus-switcher-bar">
-        <div class="gold-exclusive-badge" style="background: rgba(255, 193, 7, 0.15); border: 1px solid rgba(255, 193, 7, 0.4); color: #ffc107; padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 0.8rem; display: flex; align-items: center; gap: 6px;" title="100% Dedicated XAUUSD Commodity Swing Momentum Engine">
-          🪙 XAUUSD GOLD SPECIALIST (M15 / H1)
+        <div class="gold-exclusive-badge" title="100% Dedicated XAUUSD Commodity Scalping Engine">
+          🪙 XAUUSD (M5 / H1)
         </div>
-        <div class="account-badge" id="accountBadge" style="background: rgba(0, 230, 118, 0.15); border: 1px solid rgba(0, 230, 118, 0.4); color: #00e676; padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 0.8rem; display: flex; align-items: center; gap: 6px; transition: all 0.3s ease;" title="Auto-Detected Account Environment">
+        <div class="account-badge" id="accountBadge" title="Auto-Detected Account Environment">
           <span id="accountBadgeIcon">💎</span>
           <span id="accountBadgeText">REGULAR ACCOUNT (USD)</span>
         </div>
@@ -74,43 +74,49 @@
 
     <!-- KPI STATS CARDS -->
     <section class="kpi-grid">
+      <!-- 1. ACCOUNT EQUITY & BALANCE -->
       <div class="kpi-card" id="cardBalance">
-        <div class="kpi-label">ACCOUNT BALANCE</div>
-        <div class="kpi-value" id="valBalance">$0.00</div>
-        <div class="kpi-sub" id="subBalance">≈ Rp 0</div>
+        <div class="kpi-label">TOTAL EQUITY & CAPITAL</div>
+        <div class="kpi-value" id="valEquity">$0.00</div>
+        <div class="kpi-sub" id="subBalance">Balance: $0.00 • Margin Free: 100%</div>
       </div>
 
-      <div class="kpi-card" id="cardEquity">
-        <div class="kpi-label">NET EQUITY</div>
-        <div class="kpi-value" id="valEquity">$1,005.00</div>
-        <div class="kpi-sub" id="subEquity">Margin Free: 100%</div>
-      </div>
-
+      <!-- 2. REAL-TIME FLOATING P&L -->
       <div class="kpi-card highlight-card" id="cardFloatingPnL">
         <div class="kpi-label">REAL-TIME FLOATING P&L</div>
         <div class="kpi-value" id="valFloatingPnL">$0.00</div>
-        <div class="kpi-sub" id="subFloatingPips">0.0 pips floating</div>
+        <div class="kpi-sub" id="subFloatingPips">0.0 pips floating • 0 Active Pos</div>
       </div>
 
+      <!-- 3. DAILY PROFIT TARGET -->
       <div class="kpi-card profit-target-card" id="cardProfitTarget">
-        <div class="kpi-label">🎯 DAILY PROFIT TARGET</div>
-        <div class="kpi-value" id="valProfitTarget">$0.00 / $50.00</div>
-        <div class="kpi-sub" id="subProfitTarget">Progress: 0.0% • Active</div>
+        <div class="kpi-label">🎯 TODAY'S P&L & TARGET</div>
+        <div class="kpi-value" id="valProfitTarget">$0.00 / +$50.00</div>
+        <div class="kpi-sub" id="subProfitTarget">Progress: 0.0% • Target Goal</div>
         <div class="profit-target-bar">
           <div class="profit-target-fill" id="fillProfitTarget" style="width: 0%;"></div>
         </div>
       </div>
 
+      <!-- 4. MARKET WEATHER (HMM REGIME) -->
       <div class="kpi-card" id="cardAIRegime">
-        <div class="kpi-label">AI MARKET REGIME</div>
-        <div class="kpi-value regime-text" id="valAIRegime">INITIALIZING</div>
-        <div class="kpi-sub" id="subAIConfidence">Confidence: --%</div>
+        <div class="kpi-label">MARKET REGIME (HMM)</div>
+        <div class="kpi-value regime-text" id="valAIRegime">STANDBY</div>
+        <div class="kpi-sub" id="subAIRegimeDesc">HMM StateNoise • Anti-Chop Safe</div>
       </div>
 
+      <!-- 5. ENGINE TRIGGER STATUS -->
+      <div class="kpi-card" id="cardEngineTrigger">
+        <div class="kpi-label">ENGINE TRIGGER STATUS</div>
+        <div class="kpi-value trigger-text" id="valEngineTrigger">STANDBY (IDLE)</div>
+        <div class="kpi-sub" id="subEngineTrigger">Gate 1: M5/H1 Trend Lock • AI 55%</div>
+      </div>
+
+      <!-- 6. TODAY'S WIN RATE (SESSION ONLY) -->
       <div class="kpi-card" id="cardWinRate">
-        <div class="kpi-label">WIN RATE & PROFIT FACTOR</div>
+        <div class="kpi-label">TODAY'S WIN RATE (SESSION)</div>
         <div class="kpi-value" id="valWinRate">--%</div>
-        <div class="kpi-sub" id="subProfitFactor">PF: -- | Trades: 0</div>
+        <div class="kpi-sub" id="subProfitFactor">0 Trades Today</div>
       </div>
     </section>
 
@@ -130,49 +136,39 @@
       <div class="main-left">
         <!-- LIVE TICKERS -->
         <div class="panel ticker-panel">
-          <div class="panel-header">
-            <div class="panel-title-grp">
-              <h3>🪙 XAUUSD GOLD MARKET FEED</h3>
-              <span class="active-sym-count" id="activeSymCount">1 ACTIVE MARKET</span>
-            </div>
-            <div class="time-filter-grp">
-              <span class="time-lbl">WINDOW:</span>
-              <div class="tf-btn-grp">
-                <button class="btn-tf" data-tf="5m" onclick="window.app.setTimeframe('5m')">5M</button>
-                <button class="btn-tf" data-tf="15m" onclick="window.app.setTimeframe('15m')">15M</button>
-                <button class="btn-tf" data-tf="1h" onclick="window.app.setTimeframe('1h')">1H</button>
-                <button class="btn-tf" data-tf="4h" onclick="window.app.setTimeframe('4h')">4H</button>
-                <button class="btn-tf active" data-tf="24h" onclick="window.app.setTimeframe('24h')">24H</button>
-              </div>
-              <span class="pulse-indicator">● LIVE STREAM</span>
-            </div>
-          </div>
           <div class="ticker-grid" id="tickerGrid">
-            <!-- Populated dynamically via JavaScript -->
+            <!-- Populated dynamically via JavaScript with Pro Market Hero Card -->
           </div>
         </div>
 
         <!-- TRADINGVIEW INTERACTIVE CANDLESTICK CHART PANEL -->
         <div class="panel tv-chart-panel">
           <div class="tv-chart-header">
-            <div class="tv-sym-tabs" id="tvSymTabs">
-              <button class="btn-tv-sym active" data-sym="XAUUSDc" onclick="window.app.selectChartSymbol('XAUUSDc')">🪙 XAUUSDc</button>
+            <div class="tv-header-left">
+              <div class="tv-sym-tabs" id="tvSymTabs">
+                <button class="btn-tv-sym active" data-sym="XAUUSDm" onclick="window.app.selectChartSymbol('XAUUSDm')">🪙 XAUUSDm</button>
+              </div>
+              <div class="tv-meta-pill">
+                <span class="meta-label">INTERVAL</span>
+                <span class="meta-val highlight">M5 SCALP</span>
+              </div>
+              <div class="tv-meta-pill">
+                <span class="meta-label">BARS</span>
+                <span class="meta-val" id="tvBarCount">101</span>
+              </div>
             </div>
             <div class="tv-header-right">
-              <div class="tv-tf-tabs">
-                <button class="btn-tv-tf" data-tf="5m" onclick="window.app.setChartTimeframe('5m')">5M</button>
-                <button class="btn-tv-tf active" data-tf="15m" onclick="window.app.setChartTimeframe('15m')">15M</button>
-                <button class="btn-tv-tf" data-tf="1h" onclick="window.app.setChartTimeframe('1h')">1H</button>
-              </div>
-              <span class="chart-clock-badge">🕒 <span id="tvChartClock">--:--:--</span></span>
+              <button class="btn-chart-fit" onclick="window.app.fitTVChart()" title="Fit Chart to Viewport">⛶ Fit View</button>
             </div>
           </div>
           <div class="tv-chart-wrapper">
             <div class="tv-overlay-legend">
-              <div class="tv-legend-item"><span class="tv-legend-dot ema-fast"></span> EMA 5</div>
-              <div class="tv-legend-item"><span class="tv-legend-dot ema-slow"></span> EMA 13</div>
-              <div class="tv-legend-item"><span class="tv-legend-dot tp"></span> TP</div>
-              <div class="tv-legend-item"><span class="tv-legend-dot sl"></span> SL</div>
+              <div class="tv-legend-group">
+                <div class="tv-legend-item"><span class="tv-legend-dot ema-fast"></span> EMA 5</div>
+                <div class="tv-legend-item"><span class="tv-legend-dot ema-slow"></span> EMA 13</div>
+                <div class="tv-legend-item"><span class="tv-legend-dot tp"></span> TP</div>
+                <div class="tv-legend-item"><span class="tv-legend-dot sl"></span> SL</div>
+              </div>
               <div id="tvChartOHLC" class="tv-ohlc-values"></div>
             </div>
             <div id="tvChartContainer"></div>
@@ -299,27 +295,27 @@
           </div>
         </div>
 
-        <!-- EXECUTION TELEMETRY -->
+        <!-- SYSTEM & BROKER HEALTH -->
         <div class="panel telemetry-panel">
           <div class="panel-header">
-            <h3>📡 EXECUTION TELEMETRY</h3>
+            <h3>🖥️ SYSTEM & BROKER HEALTH</h3>
           </div>
           <div class="telemetry-grid">
             <div class="telem-item">
-              <span class="telem-label">AVG SLIPPAGE</span>
-              <span class="telem-val" id="telemSlippage">0.00 pips</span>
+              <span class="telem-label">MT5 BRIDGE TCP</span>
+              <span class="telem-val green" id="healthBridgeStatus">CONNECTED</span>
             </div>
             <div class="telem-item">
-              <span class="telem-label">FILL LATENCY</span>
-              <span class="telem-val" id="telemLatency">&lt; 1 ms</span>
+              <span class="telem-label">PROCESSED TICKS</span>
+              <span class="telem-val" id="healthTicksCount">0 ticks</span>
             </div>
             <div class="telem-item">
-              <span class="telem-label">AI INFERENCE</span>
-              <span class="telem-val green">120 ns</span>
+              <span class="telem-label">XAU SPREAD GATE</span>
+              <span class="telem-val green" id="healthSpreadStatus">2.6 / 35p (SAFE)</span>
             </div>
             <div class="telem-item">
-              <span class="telem-label">WS LATENCY</span>
-              <span class="telem-val green" id="wsLatency">2 ms</span>
+              <span class="telem-label">GO ENGINE HEAP</span>
+              <span class="telem-val cyan" id="healthMemoryAlloc">-- MB (0 B/op)</span>
             </div>
           </div>
         </div>
@@ -332,26 +328,134 @@
       <div class="analytics-grid">
         <div class="analytics-card">
           <span class="analytics-title">WIN RATE (%)</span>
-          <div class="analytics-val green" id="statWinRate">62.5%</div>
-          <span class="analytics-sub" id="statWinsLosses">10 Wins / 6 Losses</span>
+          <div class="analytics-val green" id="statWinRate">--%</div>
+          <span class="analytics-sub" id="statWinsLosses">-- Wins / -- Losses</span>
         </div>
 
         <div class="analytics-card">
           <span class="analytics-title">PROFIT FACTOR</span>
-          <div class="analytics-val gold" id="statProfitFactor">2.14</div>
-          <span class="analytics-sub" id="statGrossRatio">Gross: +$180.20 / -$84.10</span>
-        </div>
-
-        <div class="analytics-card">
-          <span class="analytics-title">REALIZED R:R RATIO</span>
-          <div class="analytics-val blue" id="statRealizedRRR">1 : 2.18</div>
-          <span class="analytics-sub" id="statAvgWinLoss">Avg Win: +$36.04 / Avg Loss: -$14.02</span>
+          <div class="analytics-val gold" id="statProfitFactor">--</div>
+          <span class="analytics-sub" id="statGrossRatio">Gross: +$0.00 / -$0.00</span>
         </div>
 
         <div class="analytics-card">
           <span class="analytics-title">TOTAL NET PROFIT</span>
-          <div class="analytics-val green" id="statNetProfit">+$96.10</div>
-          <span class="analytics-sub" id="statTotalTrades">Total 16 Completed Trades</span>
+          <div class="analytics-val green" id="statNetProfit">$0.00</div>
+          <span class="analytics-sub" id="statTotalTrades">Total 0 Completed Trades</span>
+        </div>
+
+        <div class="analytics-card">
+          <span class="analytics-title">REALIZED R:R RATIO</span>
+          <div class="analytics-val blue" id="statRealizedRRR">1 : --</div>
+          <span class="analytics-sub" id="statAvgWinLoss">Avg Win: -- / Avg Loss: --</span>
+        </div>
+
+        <div class="analytics-card">
+          <span class="analytics-title">WIN/LOSS STREAK</span>
+          <div class="analytics-val" id="statCurrentStreak">--</div>
+          <span class="analytics-sub" id="statStreakRecord">Best: -- | Worst: --</span>
+        </div>
+
+        <div class="analytics-card">
+          <span class="analytics-title">AVG HOLD TIME</span>
+          <div class="analytics-val purple" id="statAvgHoldDuration">--</div>
+          <span class="analytics-sub" id="statHoldWinLoss">Wins: -- | Losses: --</span>
+        </div>
+      </div>
+
+      <!-- MAIN INTERACTIVE ANALYTICS WORKSPACE -->
+      <div class="analytics-workspace-grid">
+        
+        <!-- LEFT: MONTHLY P&L CALENDAR -->
+        <div class="panel calendar-panel">
+          <div class="panel-header">
+            <div class="cal-header-left">
+              <h3>📅 MONTHLY P&L CALENDAR</h3>
+              <div class="cal-nav-buttons">
+                <button class="cal-nav-btn" id="calPrevMonth" title="Previous Month">◀</button>
+                <span class="cal-month-label" id="calCurrentMonthLabel">September 2026</span>
+                <button class="cal-nav-btn" id="calNextMonth" title="Next Month">▶</button>
+                <button class="cal-today-btn" id="calTodayBtn">Today</button>
+              </div>
+            </div>
+            <div class="cal-header-stats" id="calMonthStats">
+              <span class="cal-stat-pill" id="calMonthNet">Month P&L: <b>$0.00</b></span>
+              <span class="cal-stat-pill" id="calMonthWinDays">Profitable Days: <b>0%</b></span>
+            </div>
+          </div>
+
+          <!-- Active Day Filter Banner -->
+          <div class="cal-filter-banner" id="calFilterBanner" style="display: none;">
+            <span>Filtered by Date: <b id="calSelectedDateText">2026-09-07</b> (<span id="calSelectedDateTrades">0 trades</span>)</span>
+            <button class="cal-clear-filter-btn" id="calClearDateFilter">Clear Filter ✕</button>
+          </div>
+
+          <!-- Calendar Grid -->
+          <div class="calendar-container">
+            <div class="calendar-weekdays">
+              <div>MON</div>
+              <div>TUE</div>
+              <div>WED</div>
+              <div>THU</div>
+              <div>FRI</div>
+              <div>SAT</div>
+              <div>SUN</div>
+              <div class="week-total-header">WEEK</div>
+            </div>
+            <div class="calendar-days-grid" id="calendarDaysGrid">
+              <!-- Populated via JS -->
+            </div>
+          </div>
+          <div class="calendar-legend">
+            <div class="legend-item"><span class="legend-dot green"></span> Profit Day</div>
+            <div class="legend-item"><span class="legend-dot red"></span> Loss Day</div>
+            <div class="legend-item"><span class="legend-dot gray"></span> No Trades</div>
+            <div class="legend-item"><span class="legend-dot selected"></span> Click day to filter trades below</div>
+          </div>
+        </div>
+
+        <!-- RIGHT: CUMULATIVE P&L CURVE & HOURLY EDGE -->
+        <div class="panel chart-panel-analytics">
+          <div class="panel-header">
+            <div class="analytics-tab-toggle">
+              <button class="analytics-view-tab active" id="btnTabEquityCurve">📈 CUMULATIVE P&L CURVE</button>
+              <button class="analytics-view-tab" id="btnTabHourlyEdge">🕒 HOURLY EDGE HEATMAP</button>
+            </div>
+            <span class="chart-badge" id="analyticsChartBadge">PORTFOLIO TRAJECTORY</span>
+          </div>
+
+          <!-- View 1: Cumulative Equity Curve -->
+          <div class="analytics-chart-container" id="analyticsCurveContainer">
+            <div class="curve-chart-wrapper" id="equityCurveWrapper">
+              <!-- Rendered via JS SVG -->
+            </div>
+            <div class="curve-stats-strip">
+              <div class="curve-stat">
+                <span class="lbl">PEAK WATERMARK</span>
+                <span class="val green" id="statPeakWatermark">$0.00</span>
+              </div>
+              <div class="curve-stat">
+                <span class="lbl">MAX DRAWDOWN</span>
+                <span class="val red" id="statMaxDrawdownVal">$0.00 (0.0%)</span>
+              </div>
+              <div class="curve-stat">
+                <span class="lbl">FINAL ACCUMULATION</span>
+                <span class="val" id="statFinalCumulative">$0.00</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- View 2: Hourly Edge Distribution -->
+          <div class="analytics-chart-container" id="analyticsHourlyContainer" style="display: none;">
+            <div class="hourly-sessions-bar">
+              <span class="session-badge asia">🌏 Asia (07:00-14:00)</span>
+              <span class="session-badge london">🇬🇧 London (14:00-21:00)</span>
+              <span class="session-badge ny">🇺🇸 New York (19:00-02:00)</span>
+            </div>
+            <div class="hourly-bars-grid" id="hourlyBarsGrid">
+              <!-- Rendered via JS -->
+            </div>
+          </div>
         </div>
       </div>
 
@@ -369,8 +473,19 @@
       <!-- RECENT HISTORICAL TRADES TABLE -->
       <div class="panel">
         <div class="panel-header">
-          <h3>📜 COMPLETED TRADES AUDIT LOG</h3>
-          <button class="btn-sm" onclick="window.app.exportTradesCSV()">📥 Export CSV</button>
+          <div class="trades-header-left">
+            <h3>📜 COMPLETED TRADES AUDIT LOG</h3>
+            <div class="table-filter-pills" id="tableFilterPills">
+              <button class="pill-btn active" data-filter="all">ALL (<span id="cntAllTrades">0</span>)</button>
+              <button class="pill-btn green" data-filter="wins">🟢 WINS (<span id="cntWinTrades">0</span>)</button>
+              <button class="pill-btn red" data-filter="losses">🔴 LOSSES (<span id="cntLossTrades">0</span>)</button>
+              <button class="pill-btn gold" data-filter="gold">🪙 GOLD ONLY</button>
+            </div>
+          </div>
+          <div class="trades-header-right">
+            <input type="text" class="table-search-input" id="tableSearchInput" placeholder="🔍 Search ticket or symbol..." />
+            <button class="btn-sm" onclick="window.app.exportTradesCSV()">📥 Export CSV</button>
+          </div>
         </div>
         <div class="table-responsive">
           <table class="positions-table">
@@ -387,7 +502,7 @@
                 <th>MAE (DIP)</th>
                 <th>PIPS</th>
                 <th>HOLD TIME</th>
-                <th>CLOSE TIME</th>
+                <th>DATE & TIME</th>
                 <th>RESULT</th>
               </tr>
             </thead>
@@ -408,6 +523,6 @@
     </footer>
   </div>
 
-  <script src="js/app.js?v=2.7"></script>
+  <script src="js/app.js?v=4.7"></script>
 </body>
 </html>

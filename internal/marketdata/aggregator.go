@@ -65,14 +65,13 @@ func (a *OHLCVAggregator) OnTick(tick model.Tick) (model.Candle, bool) {
 		a.current.SellerVol++
 		a.lastDirection = -1
 	} else {
-		// Flat tick: split evenly or follow last valid direction
+		// Flat tick: follow last valid direction (tick rule)
 		if a.lastDirection > 0 {
-			a.current.BuyerVol += 0.5
-			a.current.SellerVol += 0.5
+			a.current.BuyerVol++
 		} else if a.lastDirection < 0 {
-			a.current.BuyerVol += 0.5
-			a.current.SellerVol += 0.5
+			a.current.SellerVol++
 		} else {
+			// No prior direction: split evenly
 			a.current.BuyerVol += 0.5
 			a.current.SellerVol += 0.5
 		}

@@ -1,7 +1,6 @@
 package portfolio
 
 import (
-	"fmt"
 	"sync"
 
 	"github.com/pompbot/scalpbot/internal/model"
@@ -110,8 +109,7 @@ func (cg *CorrelationGuard) CheckCorrelation(
 		if corr >= CorrelationThreshold && pos.Side == newSide {
 			correlatedCount++
 			if correlatedCount >= cg.maxCorrelatedCount {
-				return false, fmt.Sprintf("portfolio correlation limit: %s (%s) correlated with active %s (%s), corr=%.2f",
-					newSymbol, newSide, pos.Symbol, pos.Side, corr)
+				return false, "portfolio correlation limit exceeded"
 			}
 		}
 
@@ -119,8 +117,7 @@ func (cg *CorrelationGuard) CheckCorrelation(
 		if corr <= -CorrelationThreshold && pos.Side != newSide {
 			correlatedCount++
 			if correlatedCount >= cg.maxCorrelatedCount {
-				return false, fmt.Sprintf("portfolio inverse correlation limit: %s (%s) inversely correlated with active %s (%s), corr=%.2f",
-					newSymbol, newSide, pos.Symbol, pos.Side, corr)
+				return false, "portfolio inverse correlation limit exceeded"
 			}
 		}
 	}

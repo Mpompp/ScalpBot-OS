@@ -27,7 +27,7 @@ func main() {
 	riskPerTrade := flag.Float64("risk", 0.01, "Risk fraction per trade (e.g. 0.01 = 1%)")
 	configFile := flag.String("config", "", "Path to config YAML (optional)")
 	exportCSV := flag.String("export", "", "Export trade log to CSV file (optional)")
-	symbol := flag.String("symbol", "EURUSD", "Trading symbol")
+	symbol := flag.String("symbol", "XAUUSD", "Trading symbol")
 	flag.Parse()
 
 	log.Println("=================================================================")
@@ -81,6 +81,7 @@ func main() {
 				TP1Pips:           cfg.Position.TP1Pips,
 				TP2Pips:           cfg.Position.TP2Pips,
 				TimeStopDuration:  cfg.Position.TimeStopDuration,
+				AutoRemoveOnClose: true,
 			}
 			engineCfg.AIConfig = ai.FilterConfig{
 				EnableMLFilter:    cfg.AI.EnableMLFilter,

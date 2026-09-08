@@ -2,6 +2,7 @@ package risk
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/pompbot/scalpbot/internal/model"
@@ -22,6 +23,7 @@ type NewsFilter struct {
 	events       []NewsEvent
 	bufferBefore time.Duration // Blackout period before event
 	bufferAfter  time.Duration // Blackout period after event
+	mu           sync.RWMutex
 }
 
 // NewNewsFilter creates a news gate with configurable buffer periods.
@@ -36,13 +38,18 @@ func NewNewsFilter(bufferBefore, bufferAfter time.Duration) *NewsFilter {
 
 // SetEvents loads a list of upcoming economic events.
 // Call this periodically (e.g. daily) to refresh the calendar.
-// Events are not sorted — the filter checks all of them.
+// Thread-safe.
 func (f *NewsFilter) SetEvents(events []NewsEvent) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.events = events
 }
 
 // AddEvent adds a single event to the calendar.
+// Thread-safe.
 func (f *NewsFilter) AddEvent(event NewsEvent) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.events = append(f.events, event)
 }
 
@@ -53,7 +60,11 @@ func (f *NewsFilter) Name() string {
 
 // Allow returns true if the current time is not within any event blackout window.
 // Only high-impact events trigger the blackout.
+// Thread-safe.
 func (f *NewsFilter) Allow(tick model.Tick) (bool, string) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
 	now := time.Unix(0, tick.TimestampNs).UTC()
 
 	for i := range f.events {

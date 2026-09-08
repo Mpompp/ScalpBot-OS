@@ -98,6 +98,11 @@ func (r *RangeScalper) OnCandle(candle model.Candle) model.Signal {
 		now = time.Now().UnixNano()
 	}
 
+	// Anti multi-firing: ignore if signal already emitted for this exact candle timestamp
+	if r.lastSignalTime == now && r.lastSignalType != model.NoSignal {
+		return model.Signal{Type: model.NoSignal}
+	}
+
 	// 1. BUY MEAN-REVERSION (Price touches lower band + RSI confirms oversold bounce)
 	oversoldThreshold := r.cfg.RSIOversold
 	if oversoldThreshold <= 0 {

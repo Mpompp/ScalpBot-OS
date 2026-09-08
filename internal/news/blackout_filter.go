@@ -88,16 +88,17 @@ func (f *DynamicNewsBlackoutFilter) Name() string {
 }
 
 // extractCurrencies parses base and quote currency codes without allocations for common pairs.
+// Prioritizes Gold (XAU/USD) for zero-latency news calendar blackout checking.
 func extractCurrencies(symbol string) (string, string) {
 	switch {
+	case strings.HasPrefix(symbol, "XAUUSD") || strings.HasPrefix(symbol, "GOLD") || strings.Contains(symbol, "XAU"):
+		return "XAU", "USD"
 	case strings.HasPrefix(symbol, "EURUSD"):
 		return "EUR", "USD"
 	case strings.HasPrefix(symbol, "GBPUSD"):
 		return "GBP", "USD"
 	case strings.HasPrefix(symbol, "USDJPY"):
 		return "USD", "JPY"
-	case strings.HasPrefix(symbol, "XAUUSD") || strings.HasPrefix(symbol, "GOLD"):
-		return "XAU", "USD"
 	case strings.HasPrefix(symbol, "USDCHF"):
 		return "USD", "CHF"
 	case strings.HasPrefix(symbol, "AUDUSD"):

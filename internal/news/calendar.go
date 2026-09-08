@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -43,13 +44,15 @@ type CalendarClient struct {
 
 // NewCalendarClient creates a new economic calendar client.
 func NewCalendarClient(feedURL string) *CalendarClient {
-	return &CalendarClient{
+	c := &CalendarClient{
 		events: make([]EconomicEvent, 0, 128),
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
 		feedURL: feedURL,
 	}
+	c.seedDefaultSchedule()
+	return c
 }
 
 // AddEvent registers a single economic event.
@@ -164,4 +167,88 @@ func (c *CalendarClient) HasUpcomingHighImpact(
 	}
 
 	return false, nil
+}
+
+// GetUpcomingEvent finds the next upcoming or active economic event for the given currency.
+// Returns the event pointer, countdown in seconds (negative if already active), blackout flag, and whether an event was found.
+func (c *CalendarClient) GetUpcomingEvent(
+	currency string,
+	beforeWindow, afterWindow time.Duration,
+	nowNs int64,
+) (ev *EconomicEvent, countdownSec int64, isBlackout bool, found bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	curr := strings.ToUpper(strings.TrimSpace(currency))
+	var nearestEv *EconomicEvent
+	var minDiffNs int64 = math.MaxInt64
+
+	for i := range c.events {
+		e := &c.events[i]
+		if curr != "" && e.Currency != curr {
+			continue
+		}
+		if e.Impact != ImpactHigh && e.Impact != ImpactMedium {
+			continue
+		}
+
+		diffNs := e.TimestampNs - nowNs
+
+		// Check if inside blackout window: [-afterWindow, +beforeWindow]
+		inBlackout := (diffNs >= -afterWindow.Nanoseconds() && diffNs <= beforeWindow.Nanoseconds())
+		if inBlackout {
+			return e, diffNs / 1e9, true, true
+		}
+
+		// Otherwise look for the closest future event
+		if diffNs > 0 && diffNs < minDiffNs {
+			minDiffNs = diffNs
+			nearestEv = e
+		}
+	}
+
+	if nearestEv != nil {
+		return nearestEv, minDiffNs / 1e9, false, true
+	}
+
+	return nil, 0, false, false
+}
+
+// seedDefaultSchedule generates standard recurring macroeconomic releases anchored around the current week.
+func (c *CalendarClient) seedDefaultSchedule() {
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+
+	type templateEvent struct {
+		dayOffset int
+		hour      int
+		minute    int
+		title     string
+		currency  string
+		impact    ImpactLevel
+	}
+
+	templates := []templateEvent{
+		{dayOffset: 0, hour: 13, minute: 30, title: "Core CPI m/m", currency: "USD", impact: ImpactHigh},
+		{dayOffset: 0, hour: 15, minute: 0, title: "ISM Manufacturing PMI", currency: "USD", impact: ImpactHigh},
+		{dayOffset: 1, hour: 13, minute: 30, title: "Producer Price Index (PPI) m/m", currency: "USD", impact: ImpactHigh},
+		{dayOffset: 1, hour: 18, minute: 0, title: "FOMC Economic Projections & Rate", currency: "USD", impact: ImpactHigh},
+		{dayOffset: 2, hour: 13, minute: 30, title: "Initial Jobless Claims", currency: "USD", impact: ImpactMedium},
+		{dayOffset: 2, hour: 15, minute: 0, title: "Existing Home Sales", currency: "USD", impact: ImpactMedium},
+		{dayOffset: 3, hour: 13, minute: 30, title: "Non-Farm Employment Change (NFP)", currency: "USD", impact: ImpactHigh},
+		{dayOffset: 3, hour: 13, minute: 30, title: "Unemployment Rate", currency: "USD", impact: ImpactHigh},
+		{dayOffset: 4, hour: 14, minute: 0, title: "Fed Chair Speaks", currency: "USD", impact: ImpactHigh},
+	}
+
+	for i, t := range templates {
+		eventTime := today.AddDate(0, 0, t.dayOffset).Add(time.Duration(t.hour)*time.Hour + time.Duration(t.minute)*time.Minute)
+		c.events = append(c.events, EconomicEvent{
+			ID:          fmt.Sprintf("SCHED-%d", i+1),
+			Title:       t.title,
+			Country:     t.currency,
+			Currency:    t.currency,
+			Impact:      t.impact,
+			TimestampNs: eventTime.UnixNano(),
+		})
+	}
 }

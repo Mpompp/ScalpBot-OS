@@ -155,19 +155,22 @@ func (m *Manager) Evaluate(signal model.Signal, tick model.Tick, atrValue float6
 		return empty, fmt.Errorf("risk rejected: symbol %s already has %d active position (max %d)", signal.Symbol, m.symbolPositions[cleanSym], maxPerSym)
 	}
 
-	// Guard 5: Spread guard (Asset-Aware for Forex & Commodities)
+	// Guard 5: Spread guard (Asset-Aware Commodity & Scalp Protection)
 	pipMult := model.PipMultiplier(tick.Symbol)
 	spreadPips := tick.SpreadPips(pipMult)
 	maxSpread := m.cfg.MaxSpreadPips
 	symUpper := strings.ToUpper(tick.Symbol)
 	if strings.Contains(symUpper, "XAU") || strings.Contains(symUpper, "GOLD") {
-		// Gold spread is naturally in cents (e.g. 25-50 cents = 25-50 pips)
-		if maxSpread < 60.0 {
-			maxSpread = 60.0
-		}
-	} else if strings.Contains(symUpper, "JPY") {
-		if maxSpread < 3.5 {
-			maxSpread = 3.5
+		// Gold cent accounts (XAUUSDc) have higher broker markup ($0.50-$0.60)
+		if strings.HasSuffix(strings.ToLower(tick.Symbol), "c") {
+			if maxSpread < 60.0 {
+				maxSpread = 60.0
+			}
+		} else {
+			// Standard and Micro accounts (e.g. XAUUSDm) should strictly never exceed 35.0 pips ($0.35)
+			if maxSpread > 35.0 {
+				maxSpread = 35.0
+			}
 		}
 	}
 	if spreadPips > maxSpread {
@@ -245,10 +248,9 @@ func (m *Manager) calculateLotSize(symbol string, atrValue float64, pipMult floa
 }
 
 // RecordFill updates internal state when an order is filled.
+// Deprecated: use RecordFillForSymbol instead.
 func (m *Manager) RecordFill() {
-	m.mu.Lock()
-	m.openPositions++
-	m.mu.Unlock()
+	m.RecordFillForSymbol("")
 }
 
 // RecordFillForSymbol updates internal state when an order for a specific symbol is filled.
@@ -303,10 +305,10 @@ func (m *Manager) RecordCloseForSymbol(symbol string, pnl float64) {
 	}
 }
 
-// checkDailyReset resets daily PnL tracking at the start of a new trading day.
+// checkDailyReset resets daily PnL tracking at the start of a new trading day (UTC timezone).
 // Must be called with mu held.
 func (m *Manager) checkDailyReset() {
-	today := time.Now().YearDay()
+	today := time.Now().UTC().YearDay()
 	if today != m.lastResetDay {
 		m.dailyPnL = 0
 		m.circuitOpen = false
@@ -461,7 +463,9 @@ func (m *Manager) ApplyAccountProfile(accType model.AccountType) {
 		m.cfg.MaxPositionsPerSymbol = 1
 	} else {
 		m.cfg.MaxSpreadPips = 35.0 // Tighter spread tolerance for standard/regular accounts ($0.35)
-		m.cfg.MaxLotSize = 0.05    // Dynamic sizing allows up to 0.05 lot on regular accounts
+		if m.cfg.MaxLotSize > 0.05 || m.cfg.MaxLotSize <= 0 {
+			m.cfg.MaxLotSize = 0.05 // Cap to 0.05 max, but never increase if configured smaller (e.g. 0.01)
+		}
 		m.cfg.MaxOpenPositions = 2 // Allow up to 2 concurrent swing positions on standard equity
 		m.cfg.MaxPositionsPerSymbol = 1
 	}

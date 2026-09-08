@@ -74,8 +74,8 @@ type AIConfig struct {
 
 // BotConfig holds general bot parameters.
 type BotConfig struct {
-	Symbol   string   `yaml:"symbol"`    // Target primary currency pair (fallback)
-	Symbols  []string `yaml:"symbols"`   // Multi-symbol portfolio list (e.g. ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD"])
+	Symbol   string   `yaml:"symbol"`    // Target primary symbol (fallback, e.g. "XAUUSDc" or "XAUUSD")
+	Symbols  []string `yaml:"symbols"`   // Active symbol list (e.g. ["XAUUSDc", "XAUUSD"])
 	LogLevel string   `yaml:"log_level"` // Log verbosity: debug, info, warn, error
 }
 
@@ -147,6 +147,10 @@ type PositionConfig struct {
 	EnableBreakEven   bool          `yaml:"enable_breakeven"`    // Enable break-even
 	BreakEvenPips     float64       `yaml:"breakeven_pips"`      // Profit threshold to trigger
 	BreakEvenBuffPips float64       `yaml:"breakeven_buff_pips"` // Buffer above entry for BE SL
+	EnableProfitLocker bool         `yaml:"enable_profit_locker"` // Enable 3-stage dynamic profit locker
+	Stage1ATRMult      float64      `yaml:"stage1_atr_mult"`      // Stage 1 (Break-even) ATR multiplier
+	Stage2ATRMult      float64      `yaml:"stage2_atr_mult"`      // Stage 2 (50% lock) ATR multiplier
+	Stage3ATRMult      float64      `yaml:"stage3_atr_mult"`      // Stage 3 (75% lock) ATR multiplier
 	EnablePartialTP   bool          `yaml:"enable_partial_tp"`   // Enable partial take profit (TP1/TP2)
 	PartialTPRatio    float64       `yaml:"partial_tp_ratio"`    // Lot fraction to close at TP1 (e.g. 0.5)
 	TP1Pips           float64       `yaml:"tp1_pips"`            // TP1 profit target in pips
@@ -196,12 +200,12 @@ func LoadConfig(path string) (*Config, error) {
 func DefaultConfig() *Config {
 	return &Config{
 		Bot: BotConfig{
-			Symbol:   "EURUSD",
+			Symbol:   "XAUUSDc",
 			LogLevel: "info",
 		},
 		MarketData: MarketDataConfig{
 			TickBufferSize: 4096,
-			CandlePeriod:   1 * time.Minute,
+			CandlePeriod:   15 * time.Minute,
 			TickChannelBuf: 1024,
 		},
 		Strategy: StrategyConfig{
@@ -215,20 +219,20 @@ func DefaultConfig() *Config {
 			RSIOversold:         30.0,
 			ATRMinimum:          0.50,
 			SLATRMultiplier:     1.5,
-			TPATRMultiplier:     3.0,
+			TPATRMultiplier:     2.5,
 			MinVolRatio:         0.60,
 			EnableLimitPullback: true,
 			PullbackDiscountATR: 0.30,
 		},
 		RangeStrategy: RangeStrategyConfig{
-			Enabled:         true,
+			Enabled:         false,
 			BollingerPeriod: 20,
 			BollingerStdDev: 2.0,
 			RSIPeriod:       14,
 			ATRPeriod:       14,
 			RSIOverbought:   62.0,
 			RSIOversold:     38.0,
-			MinTPPoints:     0.0003,
+			MinTPPoints:     1.50,
 		},
 		Risk: RiskConfig{
 			InitialEquity:        900.0,
@@ -236,8 +240,8 @@ func DefaultConfig() *Config {
 			MaxDailyDrawdown:     0.05,
 			DailyProfitTargetUSD: 50.0,
 			DailyProfitTargetPct: 0.05,
-			MaxSpreadPips:        2.0,
-			MaxOpenPositions:     2,
+			MaxSpreadPips:        60.0,
+			MaxOpenPositions:     1,
 			MinLotSize:           0.01,
 			MaxLotSize:           0.01,
 			MinTickVelocityTPS:   0.0,
@@ -260,17 +264,21 @@ func DefaultConfig() *Config {
 		},
 		Position: PositionConfig{
 			EnableTrailing:    true,
-			TrailingMode:      "fixed",
-			TrailingStopPips:  12.0,
-			TrailingATRMult:   1.5,
+			TrailingMode:      "atr",
+			TrailingStopPips:  300.0,
+			TrailingATRMult:   1.8,
 			EnableBreakEven:   true,
-			BreakEvenPips:     8.0,
-			BreakEvenBuffPips: 1.0,
-			EnablePartialTP:   false,
+			BreakEvenPips:     300.0,
+			BreakEvenBuffPips: 30.0,
+			EnableProfitLocker: true,
+			Stage1ATRMult:      1.0,
+			Stage2ATRMult:      1.8,
+			Stage3ATRMult:      2.5,
+			EnablePartialTP:   true,
 			PartialTPRatio:    0.5,
-			TP1Pips:           5.0,
-			TP2Pips:           15.0,
-			TimeStopDuration:  35 * time.Minute, // 35 minutes Stagnant Trade Killer
+			TP1Pips:           400.0,
+			TP2Pips:           1200.0,
+			TimeStopDuration:  120 * time.Minute, // 120 minutes Stagnant Trade Killer
 		},
 		Session: SessionConfig{
 			Enabled:  false,

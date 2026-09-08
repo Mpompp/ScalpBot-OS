@@ -53,6 +53,10 @@ type TrackerConfig struct {
 	BreakEvenBuffPips  float64       // Buffer above entry for break-even SL (in pips)
 	EnableTrailing     bool          // Master switch for trailing stop
 	EnableBreakEven    bool          // Master switch for break-even
+	EnableProfitLocker bool          // Master switch for 3-Stage Dynamic Profit Locker
+	Stage1ATRMult      float64       // Stage 1 (Break-Even): priceGain >= mult * ATR (default 1.0)
+	Stage2ATRMult      float64       // Stage 2 (50% Profit Lock): priceGain >= mult * ATR (default 1.8)
+	Stage3ATRMult      float64       // Stage 3 (75% Profit Lock): priceGain >= mult * ATR (default 2.5)
 	EnablePartialTP    bool          // Enable multi-stage partial take profit
 	PartialTPRatio     float64       // Fraction of lot to close at TP1 (e.g. 0.5 = 50%)
 	TP1Pips            float64       // Profit target in pips for Partial TP1
@@ -71,6 +75,10 @@ func DefaultTrackerConfig() TrackerConfig {
 		BreakEvenBuffPips: 1.0,
 		EnableTrailing:    true,
 		EnableBreakEven:   true,
+		EnableProfitLocker: true,
+		Stage1ATRMult:      1.0,
+		Stage2ATRMult:      1.8,
+		Stage3ATRMult:      2.5,
 		EnablePartialTP:   false,
 		PartialTPRatio:    0.5,
 		TP1Pips:           5.0,
@@ -90,6 +98,7 @@ type TrackedPosition struct {
 	HighWaterMark      float64        // Highest unrealized P&L (for trailing)
 	BreakEvenTriggered bool           // Whether break-even has been applied
 	PartialTPTriggered bool           // Whether Partial TP1 has been executed
+	ProfitStage        int            // Multi-Stage Profit Locker (0=None, 1=BEP, 2=50% Lock, 3=75% Lock)
 	RemainingLots      float64        // Remaining active volume
 	OpenTimeNs         int64          // Open timestamp in nanoseconds
 	LastUpdateNs       int64          // Last update timestamp in nanoseconds
@@ -108,13 +117,22 @@ func (p *TrackedPosition) OpenDuration() time.Duration {
 	return time.Since(time.Unix(0, p.OpenTimeNs))
 }
 
+// ModifyEvent represents an active position whose StopLoss or TakeProfit has been modified.
+type ModifyEvent struct {
+	OrderID    string
+	Symbol     string
+	StopLoss   float64
+	TakeProfit float64
+}
+
 // PositionTracker manages active positions with trailing stop, break-even,
 // partial take profit, and time-stop functionality.
 // Designed for zero-allocation OnTick processing. Thread-safe via sync.RWMutex.
 type PositionTracker struct {
-	positions map[string]*TrackedPosition // keyed by OrderID
-	cfg       TrackerConfig
-	mu        sync.RWMutex
+	positions     map[string]*TrackedPosition // keyed by OrderID
+	modifications []ModifyEvent
+	cfg           TrackerConfig
+	mu            sync.RWMutex
 }
 
 // NewPositionTracker creates a tracker with the given configuration.
@@ -136,6 +154,7 @@ func (pt *PositionTracker) Add(pos model.Position, sl, tp float64) {
 	if openTime == 0 {
 		openTime = now.UnixNano()
 	}
+	pos.Symbol = normalizeSymbol(pos.Symbol)
 	pt.positions[pos.OrderID] = &TrackedPosition{
 		Position:      pos,
 		State:         PosOpen,
@@ -228,6 +247,18 @@ func (pt *PositionTracker) ActiveOrderIDs() []string {
 	return ids
 }
 
+// DrainModifications returns and clears all pending SL/TP modification events.
+func (pt *PositionTracker) DrainModifications() []ModifyEvent {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+	if len(pt.modifications) == 0 {
+		return nil
+	}
+	mods := pt.modifications
+	pt.modifications = nil
+	return mods
+}
+
 // UpdateSLTP updates the StopLoss and TakeProfit of a tracked position.
 func (pt *PositionTracker) UpdateSLTP(orderID string, sl, tp float64) {
 	pt.mu.Lock()
@@ -284,9 +315,14 @@ func (pt *PositionTracker) OnTick(tick model.Tick, atrValue float64, pipMult flo
 
 	var closes []CloseEvent
 
+	nowNs := tick.TimestampNs
+	if nowNs == 0 {
+		nowNs = time.Now().UnixNano()
+	}
+
 	normTickSym := normalizeSymbol(tick.Symbol)
 	for _, tp := range pt.positions {
-		if normalizeSymbol(tp.Symbol) != normTickSym {
+		if tp.Symbol != normTickSym {
 			continue
 		}
 
@@ -339,12 +375,20 @@ func (pt *PositionTracker) OnTick(tick model.Tick, atrValue float64, pipMult flo
 
 		// --- 2. Multi-Stage Partial Take Profit (TP1) ---
 		if pt.cfg.EnablePartialTP && !tp.PartialTPTriggered && pt.cfg.TP1Pips > 0 {
-			if pnlPips >= pt.cfg.TP1Pips {
+			prof := model.DetectAssetClass(tp.Symbol)
+			tp1PipsRequired := pt.cfg.TP1Pips
+			if prof.IsGold && tp1PipsRequired < 500.0 {
+				tp1PipsRequired = 500.0 // $5.00 minimum breathing space on Gold
+			}
+			if pnlPips >= tp1PipsRequired {
 				closeLots := math.Floor((tp.Lots*pt.cfg.PartialTPRatio)*100) / 100
 				if closeLots < 0.01 {
-					// Fallback to Break-Even Lock + Full Runner Mode
+					// Fallback to Break-Even Lock + Full Runner Mode (only after $5.00 gain)
 					tp.PartialTPTriggered = true
 					bufferPrice := pt.cfg.BreakEvenBuffPips / pipMult
+					if prof.IsGold {
+						bufferPrice = math.Max(bufferPrice, 0.20)
+					}
 					if tp.Side == model.SideBuy {
 						newSL := tp.EntryPrice + bufferPrice
 						if newSL > tp.StopLoss {
@@ -357,7 +401,14 @@ func (pt *PositionTracker) OnTick(tick model.Tick, atrValue float64, pipMult flo
 						}
 					}
 					tp.BreakEvenTriggered = true
+					tp.ProfitStage = 1
 					tp.State = PosModified
+					pt.modifications = append(pt.modifications, ModifyEvent{
+						OrderID:    tp.OrderID,
+						Symbol:     tp.Symbol,
+						StopLoss:   tp.StopLoss,
+						TakeProfit: tp.TakeProfit,
+					})
 				} else if closeLots < tp.RemainingLots {
 					tp.RemainingLots -= closeLots
 					tp.PartialTPTriggered = true
@@ -377,6 +428,12 @@ func (pt *PositionTracker) OnTick(tick model.Tick, atrValue float64, pipMult flo
 					}
 					tp.BreakEvenTriggered = true
 					tp.State = PosModified
+					pt.modifications = append(pt.modifications, ModifyEvent{
+						OrderID:    tp.OrderID,
+						Symbol:     tp.Symbol,
+						StopLoss:   tp.StopLoss,
+						TakeProfit: tp.TakeProfit,
+					})
 
 					// Realized PnL portion
 					realizedPnL := (closeLots / tp.Lots) * tp.CurrentPnL
@@ -389,9 +446,9 @@ func (pt *PositionTracker) OnTick(tick model.Tick, atrValue float64, pipMult flo
 						PnL:        realizedPnL,
 						Side:       tp.Side,
 						EntryPrice: tp.EntryPrice,
-						ExitPrice:        tick.Bid,
+						ExitPrice:        func() float64 { if tp.Side == model.SideSell { return tick.Ask }; return tick.Bid }(),
 						Pips:             pnlPips,
-						Duration:         time.Duration(time.Now().UnixNano() - tp.OpenTimeNs),
+						Duration:         time.Duration(nowNs - tp.OpenTimeNs),
 						MaxFavorableUSD:  tp.MaxFavorableUSD,
 						MaxAdverseUSD:    tp.MaxAdverseUSD,
 						MaxFavorablePips: tp.MaxFavorablePips,
@@ -401,13 +458,131 @@ func (pt *PositionTracker) OnTick(tick model.Tick, atrValue float64, pipMult flo
 			}
 		}
 
-		// --- 3. Break-Even Check (Asset-Aware & ATR-Proportional) ---
-		if pt.cfg.EnableBreakEven && !tp.BreakEvenTriggered {
-			prof := model.DetectAssetClass(tp.Symbol)
+		// --- 3. Multi-Stage Dynamic Profit Locker & Break-Even ---
+		prof := model.DetectAssetClass(tp.Symbol)
+		var priceGain float64
+		if tp.Side == model.SideBuy {
+			priceGain = tick.Bid - tp.EntryPrice
+		} else {
+			priceGain = tp.EntryPrice - tick.Ask
+		}
+
+		if pt.cfg.EnableProfitLocker && prof.IsGold {
+			// Stage 3: Lock 75% Profit when priceGain >= 2.8x ATR (floor $10.50)
+			stage3Threshold := math.Max(atrValue*pt.cfg.Stage3ATRMult, 10.50)
+			// Stage 2: Lock 50% Profit when priceGain >= 2.0x ATR (floor $7.50)
+			stage2Threshold := math.Max(atrValue*pt.cfg.Stage2ATRMult, 7.50)
+			// Stage 1: Break-Even Buffer when priceGain >= 1.5x ATR (floor $5.00)
+			stage1Threshold := math.Max(atrValue*pt.cfg.Stage1ATRMult, 5.00)
+
+			if priceGain >= stage3Threshold && tp.ProfitStage < 3 {
+				lockedGain := priceGain * 0.75
+				if lockedGain < 7.50 {
+					lockedGain = 7.50
+				}
+				var newSL float64
+				if tp.Side == model.SideBuy {
+					newSL = tp.EntryPrice + lockedGain
+				} else {
+					newSL = tp.EntryPrice - lockedGain
+				}
+
+				shouldUpdate := false
+				if tp.Side == model.SideBuy {
+					if newSL > tp.StopLoss+0.25 {
+						shouldUpdate = true
+					}
+				} else {
+					if tp.StopLoss == 0 || newSL < tp.StopLoss-0.25 {
+						shouldUpdate = true
+					}
+				}
+
+				if shouldUpdate {
+					tp.StopLoss = newSL
+					tp.ProfitStage = 3
+					tp.BreakEvenTriggered = true
+					tp.State = PosModified
+					pt.modifications = append(pt.modifications, ModifyEvent{
+						OrderID:    tp.OrderID,
+						Symbol:     tp.Symbol,
+						StopLoss:   tp.StopLoss,
+						TakeProfit: tp.TakeProfit,
+					})
+				}
+			} else if priceGain >= stage2Threshold && tp.ProfitStage < 2 {
+				lockedGain := priceGain * 0.50
+				if lockedGain < 3.50 {
+					lockedGain = 3.50
+				}
+				var newSL float64
+				if tp.Side == model.SideBuy {
+					newSL = tp.EntryPrice + lockedGain
+				} else {
+					newSL = tp.EntryPrice - lockedGain
+				}
+
+				shouldUpdate := false
+				if tp.Side == model.SideBuy {
+					if newSL > tp.StopLoss+0.25 {
+						shouldUpdate = true
+					}
+				} else {
+					if tp.StopLoss == 0 || newSL < tp.StopLoss-0.25 {
+						shouldUpdate = true
+					}
+				}
+
+				if shouldUpdate {
+					tp.StopLoss = newSL
+					tp.ProfitStage = 2
+					tp.BreakEvenTriggered = true
+					tp.State = PosModified
+					pt.modifications = append(pt.modifications, ModifyEvent{
+						OrderID:    tp.OrderID,
+						Symbol:     tp.Symbol,
+						StopLoss:   tp.StopLoss,
+						TakeProfit: tp.TakeProfit,
+					})
+				}
+			} else if priceGain >= stage1Threshold && tp.ProfitStage < 1 {
+				bufferPrice := math.Max(pt.cfg.BreakEvenBuffPips/pipMult, 0.20)
+				var newSL float64
+				if tp.Side == model.SideBuy {
+					newSL = tp.EntryPrice + bufferPrice
+				} else {
+					newSL = tp.EntryPrice - bufferPrice
+				}
+
+				shouldUpdate := false
+				if tp.Side == model.SideBuy {
+					if newSL > tp.StopLoss+0.15 {
+						shouldUpdate = true
+					}
+				} else {
+					if tp.StopLoss == 0 || newSL < tp.StopLoss-0.15 {
+						shouldUpdate = true
+					}
+				}
+
+				if shouldUpdate {
+					tp.StopLoss = newSL
+					tp.ProfitStage = 1
+					tp.BreakEvenTriggered = true
+					tp.State = PosModified
+					pt.modifications = append(pt.modifications, ModifyEvent{
+						OrderID:    tp.OrderID,
+						Symbol:     tp.Symbol,
+						StopLoss:   tp.StopLoss,
+						TakeProfit: tp.TakeProfit,
+					})
+				}
+			}
+		} else if pt.cfg.EnableBreakEven && !tp.BreakEvenTriggered {
 			bePipsRequired := pt.cfg.BreakEvenPips
 			if prof.IsGold {
-				// Gold requires at least $1.20 - $1.50 profit before locking BEP (never choke on tick noise)
-				minGoldBEPPips := math.Max(atrValue*100.0*0.9, 120.0)
+				// Gold requires at least $5.00 profit before locking BEP (never choke on tick noise)
+				minGoldBEPPips := math.Max(atrValue*100.0*1.5, 500.0)
 				if bePipsRequired < minGoldBEPPips {
 					bePipsRequired = minGoldBEPPips
 				}
@@ -430,7 +605,14 @@ func (pt *PositionTracker) OnTick(tick model.Tick, atrValue float64, pipMult flo
 					}
 				}
 				tp.BreakEvenTriggered = true
+				tp.ProfitStage = 1
 				tp.State = PosModified
+				pt.modifications = append(pt.modifications, ModifyEvent{
+					OrderID:    tp.OrderID,
+					Symbol:     tp.Symbol,
+					StopLoss:   tp.StopLoss,
+					TakeProfit: tp.TakeProfit,
+				})
 			}
 		}
 
@@ -456,17 +638,34 @@ func (pt *PositionTracker) OnTick(tick model.Tick, atrValue float64, pipMult flo
 					}
 				}
 
+				minStep := 0.25
+				if !prof.IsGold {
+					minStep = 5.0 / pipMult
+				}
+
 				if tp.Side == model.SideBuy {
 					newSL := tick.Bid - trailDist
-					if newSL > tp.StopLoss {
+					if newSL > tp.StopLoss+minStep {
 						tp.StopLoss = newSL
 						tp.State = PosModified
+						pt.modifications = append(pt.modifications, ModifyEvent{
+							OrderID:    tp.OrderID,
+							Symbol:     tp.Symbol,
+							StopLoss:   tp.StopLoss,
+							TakeProfit: tp.TakeProfit,
+						})
 					}
 				} else {
 					newSL := tick.Ask + trailDist
-					if tp.StopLoss != 0 && newSL < tp.StopLoss {
+					if tp.StopLoss != 0 && newSL < tp.StopLoss-minStep {
 						tp.StopLoss = newSL
 						tp.State = PosModified
+						pt.modifications = append(pt.modifications, ModifyEvent{
+							OrderID:    tp.OrderID,
+							Symbol:     tp.Symbol,
+							StopLoss:   tp.StopLoss,
+							TakeProfit: tp.TakeProfit,
+						})
 					}
 				}
 			}
@@ -496,7 +695,7 @@ func (pt *PositionTracker) OnTick(tick model.Tick, atrValue float64, pipMult flo
 					EntryPrice:       tp.EntryPrice,
 					ExitPrice:        exitPr,
 					Pips:             pnlPips,
-					Duration:         time.Duration(time.Now().UnixNano() - tp.OpenTimeNs),
+					Duration:         time.Duration(nowNs - tp.OpenTimeNs),
 					MaxFavorableUSD:  tp.MaxFavorableUSD,
 					MaxAdverseUSD:    tp.MaxAdverseUSD,
 					MaxFavorablePips: tp.MaxFavorablePips,
@@ -530,7 +729,7 @@ func (pt *PositionTracker) OnTick(tick model.Tick, atrValue float64, pipMult flo
 					EntryPrice:       tp.EntryPrice,
 					ExitPrice:        exitPr,
 					Pips:             pnlPips,
-					Duration:         time.Duration(time.Now().UnixNano() - tp.OpenTimeNs),
+					Duration:         time.Duration(nowNs - tp.OpenTimeNs),
 					MaxFavorableUSD:  tp.MaxFavorableUSD,
 					MaxAdverseUSD:    tp.MaxAdverseUSD,
 					MaxFavorablePips: tp.MaxFavorablePips,
@@ -561,7 +760,7 @@ func (pt *PositionTracker) OnTick(tick model.Tick, atrValue float64, pipMult flo
 					EntryPrice:       tp.EntryPrice,
 					ExitPrice:        exitPr,
 					Pips:             pnlPips,
-					Duration:         time.Duration(time.Now().UnixNano() - tp.OpenTimeNs),
+					Duration:         time.Duration(nowNs - tp.OpenTimeNs),
 					MaxFavorableUSD:  tp.MaxFavorableUSD,
 					MaxAdverseUSD:    tp.MaxAdverseUSD,
 					MaxFavorablePips: tp.MaxFavorablePips,

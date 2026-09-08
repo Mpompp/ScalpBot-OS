@@ -284,6 +284,65 @@ func TestTracker_MFE_MAE_Tracking(t *testing.T) {
 	}
 }
 
+func TestProfitLocker_Stages(t *testing.T) {
+	cfg := DefaultTrackerConfig()
+	cfg.EnableProfitLocker = true
+	cfg.EnableBreakEven = false
+	cfg.EnableTrailing = false
+	tr := NewPositionTracker(cfg)
+
+	// Gold SELL position @ 4400.00
+	pos := makeTestPosition("GOLD-01", model.SideSell, 4400.00)
+	pos.Symbol = "XAUUSDm"
+	tr.Add(pos, 4405.00, 4380.00)
+
+	atr := 3.00
+	pipMult := 100.0
+
+	// 1. Initial price: 4398.00 (gain $2.00, below Stage 1 $5.00 threshold)
+	tick1 := model.Tick{Symbol: "XAUUSDm", Bid: 4397.90, Ask: 4398.00}
+	tr.OnTick(tick1, atr, pipMult)
+	p := tr.ActivePositions()[0]
+	if p.ProfitStage != 0 {
+		t.Fatalf("expected ProfitStage 0, got %d", p.ProfitStage)
+	}
+
+	// 2. Price drops to 4394.50 (gain $5.50 >= Stage 1 $5.00 threshold)
+	tick2 := model.Tick{Symbol: "XAUUSDm", Bid: 4394.40, Ask: 4394.50}
+	tr.OnTick(tick2, atr, pipMult)
+	p = tr.ActivePositions()[0]
+	if p.ProfitStage != 1 {
+		t.Fatalf("expected ProfitStage 1 (Break-Even), got %d", p.ProfitStage)
+	}
+	if p.StopLoss > 4399.85 {
+		t.Fatalf("expected SL moved to BEP ~4399.80, got %f", p.StopLoss)
+	}
+
+	// 3. Price drops to 4392.00 (gain $8.00 >= Stage 2 $7.50 threshold)
+	tick3 := model.Tick{Symbol: "XAUUSDm", Bid: 4391.90, Ask: 4392.00}
+	tr.OnTick(tick3, atr, pipMult)
+	p = tr.ActivePositions()[0]
+	if p.ProfitStage != 2 {
+		t.Fatalf("expected ProfitStage 2 (50%% Lock), got %d", p.ProfitStage)
+	}
+	// Locked gain = 8.00 * 0.5 = 4.00 -> SL should be 4400 - 4.00 = 4396.00
+	if p.StopLoss > 4396.25 {
+		t.Fatalf("expected SL locked at <= 4396.25, got %f", p.StopLoss)
+	}
+
+	// 4. Price drops to 4388.50 (gain $11.50 >= Stage 3 $10.50 threshold)
+	tick4 := model.Tick{Symbol: "XAUUSDm", Bid: 4388.40, Ask: 4388.50}
+	tr.OnTick(tick4, atr, pipMult)
+	p = tr.ActivePositions()[0]
+	if p.ProfitStage != 3 {
+		t.Fatalf("expected ProfitStage 3 (75%% Lock), got %d", p.ProfitStage)
+	}
+	// Locked gain = 11.50 * 0.75 = 8.625 -> SL should be 4400 - 8.625 = 4391.375
+	if p.StopLoss > 4391.50 {
+		t.Fatalf("expected SL locked at <= 4391.50, got %f", p.StopLoss)
+	}
+}
+
 func BenchmarkTrackerOnTick(b *testing.B) {
 	cfg := DefaultTrackerConfig()
 	cfg.EnablePartialTP = true

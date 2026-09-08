@@ -5,7 +5,7 @@
 # Environment variables with SCALP_ prefix override YAML values.
 
 bot:
-  symbol: "XAUUSDc"        # Gold Cent / XAUUSD target commodity
+  symbol: "XAUUSDm"        # Exness Gold Mini/Standard commodity
   log_level: "info"        # Logging level: debug | info | warn | error
 
 # -----------------------------------------------------------------------------
@@ -13,24 +13,24 @@ bot:
 # -----------------------------------------------------------------------------
 market_data:
   tick_buffer_size: 4096   # Ring buffer capacity (number of ticks)
-  candle_period: 15m       # OHLCV aggregation period (M15 — Gold intraday swing momentum)
+  candle_period: 5m        # OHLCV aggregation period (M5 — Realistic for small accounts)
   tick_channel_buf: 1024   # Tick channel buffer size for pipeline
 
 # -----------------------------------------------------------------------------
-# Strategy: Momentum Scalper (Trend Hunter) — M15 Execution with H1 Macro Trend
+# Strategy: Momentum Scalper (Trend Hunter) — M5 Execution with H1 Macro Trend
 # -----------------------------------------------------------------------------
 strategy:
-  timeframe: "M15"         # Primary strategy execution timeframe (15-Minute — high signal-to-noise)
+  timeframe: "M5"          # Primary strategy execution timeframe (5-Minute — optimal noise/spread balance)
   macro_timeframe: "H1"    # Higher timeframe macro trend confirmation (1-Hour institutional trend)
-  fast_ema_period: 5       # Fast EMA lookback on M15 (= 75 minutes)
-  slow_ema_period: 13      # Slow EMA lookback on M15 (= 195 minutes)
+  fast_ema_period: 5       # Fast EMA lookback on M5 (= 25 minutes)
+  slow_ema_period: 13      # Slow EMA lookback on M5 (= 65 minutes)
   rsi_period: 14           # RSI lookback
   atr_period: 14           # ATR lookback (also used by risk engine)
   rsi_overbought: 70.0     # RSI upper filter threshold
   rsi_oversold: 30.0       # RSI lower filter threshold
-  atr_minimum: 0.50        # Minimum ATR for signal generation ($0.50 Gold M15 candle body)
-  sl_atr_multiplier: 1.5   # Stop Loss = 1.5x ATR (min $3.00 floor via asset_profile)
-  tp_atr_multiplier: 2.5   # Take Profit = 2.5x ATR (min $8.00 floor via asset_profile) -> RR 1:2.5
+  atr_minimum: 0.35        # Minimum ATR for signal generation ($0.35 Gold M5 candle body)
+  sl_atr_multiplier: 1.5   # Stop Loss = 1.5x ATR (min $2.50 floor)
+  tp_atr_multiplier: 2.5   # Take Profit = 2.5x ATR (min $6.00 floor) -> RR 1:2.5
   min_vol_ratio: 0.60       # Dead-Market Filter (Nyao Scalper VolRatio >= 60% of baseline ATR)
   enable_limit_pullback: true # Discount Limit entry on breakout pullback (no buying the top)
   pullback_discount_atr: 0.30 # 0.3x ATR retracement depth before entry
@@ -46,7 +46,7 @@ range_strategy:
   atr_period: 14           # ATR lookback
   rsi_overbought: 62.0     # Reversal sell trigger
   rsi_oversold: 38.0       # Reversal buy trigger
-  min_tp_points: 0.0003    # Minimum TP distance (~3 pips)
+  min_tp_points: 1.50      # Minimum TP distance ($1.50 Gold)
 
 # -----------------------------------------------------------------------------
 # Risk Management (Calibrated for 900 USC Cent Account)
@@ -67,21 +67,25 @@ risk:
   max_tick_velocity_tps: 0.0 # Max ticks/sec
 
 # -----------------------------------------------------------------------------
-# Position Tracking & Trade Management — M15/H1 Intraday Swing (1h–2h trade horizon)
+# Position Tracking & Trade Management — M5 Scalping (30m–45m trade horizon)
 # -----------------------------------------------------------------------------
 position:
   enable_trailing: true       # Master switch for trailing stop
   trailing_mode: "atr"        # ATR-based trailing — gives Gold swing room to breathe
-  trailing_stop_pips: 300.0   # Fallback fixed trailing (300 pips = $3.00) if ATR unavailable
-  trailing_atr_mult: 1.8      # ATR x1.8 trailing distance for M15 swings
+  trailing_stop_pips: 150.0   # Fallback fixed trailing (150 pips = $1.50) if ATR unavailable
+  trailing_atr_mult: 1.5      # ATR x1.5 trailing distance for M5 scalping
   enable_breakeven: true      # Master switch for break-even
-  breakeven_pips: 300.0       # Move SL to entry after +$3.00 profit (300 pips)
-  breakeven_buff_pips: 30.0   # Buffer above entry price for break-even SL (+$0.30 Gold)
+  breakeven_pips: 500.0       # Move SL to entry after +$5.00 profit (500 pips)
+  breakeven_buff_pips: 20.0   # Buffer above entry price for break-even SL (+$0.20 Gold)
+  enable_profit_locker: true  # Multi-Stage Dynamic Profit Locker (Stage 1: BE, Stage 2: 50% Lock, Stage 3: 75% Lock)
+  stage1_atr_mult: 1.5        # Stage 1 trigger threshold (1.5x ATR, min $5.00)
+  stage2_atr_mult: 2.0        # Stage 2 trigger threshold (2.0x ATR, min $7.50)
+  stage3_atr_mult: 2.8        # Stage 3 trigger threshold (2.8x ATR, min $10.50)
   enable_partial_tp: true     # Enable closing 50% lot at TP1 and letting remainder run
   partial_tp_ratio: 0.5       # Lot fraction to close at TP1 (0.5 = 50%)
-  tp1_pips: 400.0             # Target pips for Partial TP1 ($4.00 = 400 pips)
-  tp2_pips: 1200.0            # Final target pips for TP2 ($12.00 = 1200 pips)
-  time_stop_duration: 120m    # Stagnant Trade Killer: auto-close if flat > 120 minutes (M15/H1)
+  tp1_pips: 500.0             # Target pips for Partial TP1 ($5.00 = 500 pips)
+  tp2_pips: 1000.0            # Final target pips for TP2 ($10.00 = 1000 pips)
+  time_stop_duration: 45m     # Stagnant Trade Killer: auto-close if flat > 45 minutes (M5)
 
 # -----------------------------------------------------------------------------
 # Trading Session Filter — London + NY Overlap Only (Best for Gold M5/M15)

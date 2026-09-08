@@ -10,13 +10,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"html"
 	"log"
 	"math"
 	"math/rand"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -59,6 +63,7 @@ type PriceSnapshot struct {
 
 // SymbolPipeline encapsulates the per-symbol analysis pipeline.
 type SymbolPipeline struct {
+	mu            sync.RWMutex
 	Symbol        string
 	Buffer        *marketdata.TickRingBuffer
 	Strategy      *strategy.MomentumScalper
@@ -88,6 +93,64 @@ type SymbolPipeline struct {
 	LastTickTime  time.Time
 	Snapshots     []PriceSnapshot
 	RecentCandles []web.CandleTelemetry
+}
+
+func (p *SymbolPipeline) SetSignalStatus(signal, status, reason, timeStr string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if signal != "" {
+		p.LastSignal = signal
+	}
+	p.SignalStatus = status
+	p.SignalReason = reason
+	p.SignalTime = timeStr
+}
+
+func loadCandlesCache(symbol string) []web.CandleTelemetry {
+	cleanSym := strings.ToUpper(strings.TrimRight(symbol, "cmCM."))
+	cacheFile := filepath.Join("data", fmt.Sprintf("candles_%s.json", cleanSym))
+	data, err := os.ReadFile(cacheFile)
+	if err != nil {
+		return nil
+	}
+	var candles []web.CandleTelemetry
+	if err := json.Unmarshal(data, &candles); err != nil {
+		return nil
+	}
+	return candles
+}
+
+func saveCandlesCache(symbol string, candles []web.CandleTelemetry) {
+	if len(candles) == 0 {
+		return
+	}
+	cleanSym := strings.ToUpper(strings.TrimRight(symbol, "cmCM."))
+	cacheFile := filepath.Join("data", fmt.Sprintf("candles_%s.json", cleanSym))
+	data, err := json.Marshal(candles)
+	if err == nil {
+		_ = os.WriteFile(cacheFile, data, 0644)
+	}
+}
+
+func (p *SymbolPipeline) AddRecentCandle(c web.CandleTelemetry) {
+	p.mu.Lock()
+	p.RecentCandles = append(p.RecentCandles, c)
+	if len(p.RecentCandles) > 100 {
+		p.RecentCandles = p.RecentCandles[len(p.RecentCandles)-100:]
+	}
+	cachedCopy := make([]web.CandleTelemetry, len(p.RecentCandles))
+	copy(cachedCopy, p.RecentCandles)
+	p.mu.Unlock()
+
+	saveCandlesCache(p.Symbol, cachedCopy)
+}
+
+func (p *SymbolPipeline) GetRecentCandles() []web.CandleTelemetry {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	res := make([]web.CandleTelemetry, len(p.RecentCandles))
+	copy(res, p.RecentCandles)
+	return res
 }
 
 type CompletedTrade struct {
@@ -250,6 +313,8 @@ func computePerformanceTelemetry() *web.PerformanceTelemetry {
 			Pips:      revT.Pips,
 			Duration:  revT.Duration.Round(time.Second).String(),
 			CloseTime: revT.CloseTime.Format("15:04:05"),
+			Date:      revT.CloseTime.Format("2006-01-02"),
+			Timestamp: revT.CloseTime.Unix(),
 			MFEUSD:    revT.MaxFavorableUSD,
 			MAEUSD:    revT.MaxAdverseUSD,
 			MFEPips:   revT.MaxFavorablePips,
@@ -285,8 +350,8 @@ var (
 )
 
 func applyMarketFocus(focus MarketFocus) {
-	currentMarketFocus.Store(FocusGoldOnly)
-	log.Printf("[market-focus] 🪙 100%% GOLD EXCLUSIVE ENGINE ACTIVE (XAUUSD)")
+	currentMarketFocus.Store(focus)
+	log.Printf("[market-focus] 🪙 Market focus changed to: %s", focus)
 }
 
 func applyTradingMode(mode TradingMode, riskMgr *risk.Manager) {
@@ -350,7 +415,7 @@ func getRecentEvents() []web.SignalEvent {
 
 func createSymbolPipeline(sym string, cfg *config.Config) *SymbolPipeline {
 	cleanSym := normalizeSymbol(sym)
-	return &SymbolPipeline{
+	p := &SymbolPipeline{
 		Symbol: cleanSym,
 		Buffer: marketdata.NewTickRingBuffer(cfg.MarketData.TickBufferSize),
 		Strategy: strategy.NewMomentumScalper(fmt.Sprintf("momentum-%s", cleanSym), strategy.MomentumScalperConfig{
@@ -396,13 +461,31 @@ func createSymbolPipeline(sym string, cfg *config.Config) *SymbolPipeline {
 			FilterRangingChop:  cfg.AI.FilterRangingChop,
 			DualModeEnabled:    cfg.AI.DualModeEnabled,
 		}),
-		SpreadFilter: risk.NewSpreadAnomalyFilter(2.0, 100),
+		SpreadFilter: risk.NewSpreadAnomalyFilter(1.6, 50),
 		LastSignal:   "",
 		SignalStatus: "IDLE",
 		SignalReason: "Gaussian HMM Decision Layer Active",
 		SignalTime:   time.Now().Format("15:04:05"),
 		RecentCandles: make([]web.CandleTelemetry, 0, 100),
 	}
+
+	if cached := loadCandlesCache(sym); len(cached) > 0 {
+		p.RecentCandles = cached
+		log.Printf("[pipeline] 📂 Restored %d cached historical candles from disk for %s", len(cached), sym)
+		for _, cd := range cached {
+			p.Strategy.OnCandle(model.Candle{
+				Symbol:      sym,
+				Open:        cd.Open,
+				High:        cd.High,
+				Low:         cd.Low,
+				Close:       cd.Close,
+				Volume:      cd.Volume,
+				TimestampNs: cd.Time * 1e9,
+			})
+		}
+	}
+
+	return p
 }
 
 func main() {
@@ -413,6 +496,7 @@ func main() {
 	brokerFlag := flag.String("broker", "", "Override broker type: 'mock' or 'mt5'")
 	symbolsFlag := flag.String("symbols", "", "Comma-separated active symbols (e.g. 'XAUUSDc', 'XAUUSD', 'GOLDmicro')")
 	portFlag := flag.Int("port", 0, "Override web dashboard port (e.g. 8080)")
+	lotFlag := flag.Float64("lots", 0, "Override order lot size (e.g. 0.01, 0.05, 0.10)")
 	flag.Parse()
 
 	cfg, err := config.LoadConfig(*configPath)
@@ -437,6 +521,12 @@ func main() {
 		if len(clean) > 0 {
 			cfg.Bot.Symbols = clean
 		}
+	}
+
+	if *lotFlag > 0 {
+		cfg.Risk.MinLotSize = *lotFlag
+		cfg.Risk.MaxLotSize = *lotFlag
+		log.Printf("[main] 🎯 MANUAL LOT SIZE OVERRIDE: %.2f lots per trade", *lotFlag)
 	}
 
 	symbols := cfg.Bot.Symbols
@@ -561,6 +651,13 @@ func main() {
 	log.Printf("[main] news blackout filter enabled (before=%v, after=%v)",
 		cfg.News.BlackoutBefore, cfg.News.BlackoutAfter)
 
+	for _, p := range pipelines {
+		if p.SpreadFilter != nil {
+			riskMgr.AddFilter(p.SpreadFilter)
+		}
+	}
+	log.Printf("[main] dynamic spread anomaly filter registered in risk core")
+
 	// Cross-symbol portfolio correlation guard
 	correlationGuard := portfolio.NewCorrelationGuard(cfg.Portfolio.MaxCorrelatedPositions)
 	volatilitySizer := portfolio.NewVolatilityParitySizer(portfolio.SizerConfig{
@@ -631,9 +728,13 @@ func main() {
 		TrailingATRMult:   cfg.Position.TrailingATRMult,
 		BreakEvenPips:     cfg.Position.BreakEvenPips,
 		BreakEvenBuffPips: cfg.Position.BreakEvenBuffPips,
-		EnableTrailing:    cfg.Position.EnableTrailing,
-		EnableBreakEven:   cfg.Position.EnableBreakEven,
-		EnablePartialTP:   cfg.Position.EnablePartialTP,
+		EnableTrailing:     cfg.Position.EnableTrailing,
+		EnableBreakEven:    cfg.Position.EnableBreakEven,
+		EnableProfitLocker: cfg.Position.EnableProfitLocker,
+		Stage1ATRMult:      cfg.Position.Stage1ATRMult,
+		Stage2ATRMult:      cfg.Position.Stage2ATRMult,
+		Stage3ATRMult:      cfg.Position.Stage3ATRMult,
+		EnablePartialTP:    cfg.Position.EnablePartialTP,
 		PartialTPRatio:    cfg.Position.PartialTPRatio,
 		TP1Pips:           cfg.Position.TP1Pips,
 		TP2Pips:           cfg.Position.TP2Pips,
@@ -698,6 +799,7 @@ func main() {
 	var liveBalance atomic.Uint64
 	var liveEquity atomic.Uint64
 	var liveFreeMargin atomic.Uint64
+	var totalTicksProcessed atomic.Int64
 
 	setLiveFloat := func(a *atomic.Uint64, v float64) {
 		a.Store(math.Float64bits(v))
@@ -729,11 +831,22 @@ func main() {
 				}
 				regimeStr := "NEUTRAL"
 				confVal := 0.0
+				goldPrice := 0.0
+				goldSpread := 0.0
 				for _, p := range pipelines {
 					if p.AIFilter != nil {
 						regimeStr = p.AIFilter.LastRegime().String()
 						confVal = p.AIFilter.LastConfidence()
-						break
+					}
+					if lastTick, hasTick := p.Buffer.Last(); hasTick {
+						goldPrice = lastTick.Bid
+						pipMult := model.PipMultiplier(lastTick.Symbol)
+						sp := lastTick.SpreadPips(pipMult)
+						if strings.Contains(strings.ToUpper(lastTick.Symbol), "XAU") {
+							goldSpread = sp / 10.0
+						} else {
+							goldSpread = sp
+						}
 					}
 				}
 				pipelineMu.RUnlock()
@@ -749,6 +862,10 @@ func main() {
 					focusStr = string(f.(MarketFocus))
 				}
 
+				var m runtime.MemStats
+				runtime.ReadMemStats(&m)
+				memMB := float64(m.Alloc) / (1024.0 * 1024.0)
+
 				return notifier.BotStatusSummary{
 					Balance:             curBal,
 					Equity:              curEq,
@@ -763,6 +880,11 @@ func main() {
 					ProfitTargetReached: riskMgr.IsProfitTargetReached(),
 					ProfitTargetAmount:  riskMgr.ProfitTargetAmount(),
 					ActiveSymbols:       symNames,
+					IsPaused:            emergencyHalted.Load(),
+					TotalTicksProcessed: totalTicksProcessed.Load(),
+					MemoryAllocMB:       memMB,
+					GoldPrice:           goldPrice,
+					GoldSpread:          goldSpread,
 				}
 			},
 			SetTradingMode: func(mode string) error {
@@ -784,6 +906,118 @@ func main() {
 					count++
 				}
 				return count, nil
+			},
+			TogglePause: func(pause bool) bool {
+				emergencyHalted.Store(pause)
+				log.Printf("[telegram-bot] 🛑 Pause toggled via Telegram: %v", pause)
+				return emergencyHalted.Load()
+			},
+			GetTodayReport: func() string {
+				tradeHistoryMu.RLock()
+				todayStr := time.Now().Format("2006-01-02")
+				var todayList []CompletedTrade
+				for _, t := range completedTrades {
+					if t.CloseTime.Format("2006-01-02") == todayStr {
+						todayList = append(todayList, t)
+					}
+				}
+				tradeHistoryMu.RUnlock()
+
+				totalToday := len(todayList)
+				if totalToday == 0 {
+					return "📈 <b>LAPORAN TRADING HARI INI</b>\n━━━━━━━━━━━━━━━━━━━━\n<i>Belum ada transaksi yang ditutup hari ini (Sesi Bersih).</i>"
+				}
+
+				wins := 0
+				losses := 0
+				totalPnL := 0.0
+				totalPips := 0.0
+				for _, t := range todayList {
+					totalPnL += t.NetPnL
+					totalPips += t.Pips
+					if t.NetPnL >= 0 {
+						wins++
+					} else {
+						losses++
+					}
+				}
+				wr := (float64(wins) / float64(totalToday)) * 100.0
+				sign := "+"
+				if totalPnL < 0 {
+					sign = ""
+				}
+
+				report := fmt.Sprintf("📈 <b>LAPORAN TRADING HARI INI (%s)</b>\n"+
+					"━━━━━━━━━━━━━━━━━━━━\n"+
+					"• <b>Total Trades:</b> <code>%d trades</code>\n"+
+					"• <b>Win Rate:</b> <b>%.1f%%</b> (%dW / %dL)\n"+
+					"• <b>Net P&L:</b> <b>%s$%.2f</b> (%s%.1f pips)\n"+
+					"━━━━━━━━━━━━━━━━━━━━\n"+
+					"<b>Transaksi Terbaru:</b>\n",
+					todayStr, totalToday, wr, wins, losses, sign, totalPnL, sign, totalPips)
+
+				startIdx := 0
+				if len(todayList) > 5 {
+					startIdx = len(todayList) - 5
+				}
+				for i := len(todayList) - 1; i >= startIdx; i-- {
+					t := todayList[i]
+					tSign := "+"
+					if t.NetPnL < 0 {
+						tSign = ""
+					}
+					tEmoji := "✅"
+					if t.NetPnL < 0 {
+						tEmoji = "❌"
+					}
+					report += fmt.Sprintf("%s #%s %s %.2f @ %.2f ➔ %s$%.2f (%s WIB)\n",
+						tEmoji, t.Ticket, t.Side, t.Lots, t.Entry, tSign, t.NetPnL, t.CloseTime.Add(7*time.Hour).Format("15:04"))
+				}
+				return report
+			},
+			GetPriceQuote: func() string {
+				pipelineMu.RLock()
+				var p *SymbolPipeline
+				for _, pl := range pipelines {
+					p = pl
+					break
+				}
+				pipelineMu.RUnlock()
+				if p == nil {
+					return "🪙 <i>Data harga belum tersedia.</i>"
+				}
+
+				lastTick, hasTick := p.Buffer.Last()
+				if !hasTick {
+					return "🪙 <i>Menghubungkan ke stream MT5...</i>"
+				}
+
+				p.mu.RLock()
+				high := p.High24h
+				low := p.Low24h
+				regime := p.SignalReason
+				p.mu.RUnlock()
+
+				pipMult := model.PipMultiplier(lastTick.Symbol)
+				spread := lastTick.SpreadPips(pipMult)
+				spreadDisplay := spread
+				if strings.Contains(strings.ToUpper(lastTick.Symbol), "XAU") {
+					spreadDisplay = spread / 10.0
+				}
+
+				return fmt.Sprintf("🪙 <b>QUOTE HARGA LIVE (XAUUSD)</b>\n"+
+					"━━━━━━━━━━━━━━━━━━━━\n"+
+					"• <b>Bid (Sell):</b> <code>$%.2f</code>\n"+
+					"• <b>Ask (Buy):</b> <code>$%.2f</code>\n"+
+					"• <b>Spread:</b> <code>%.1f pips</code> (Limit: 35.0p)\n"+
+					"• <b>24H Range:</b> <code>$%.2f ➔ $%.2f</code>\n"+
+					"• <b>Regime Status:</b> <code>%s</code>\n"+
+					"• <b>Stream:</b> <code>TCP 5556 LIVE (%s WIB)</code>",
+					lastTick.Bid, lastTick.Ask,
+					spreadDisplay,
+					low, high,
+					html.EscapeString(regime),
+					time.Now().UTC().Add(7*time.Hour).Format("15:04:05"))
 			},
 		})
 		tgBot.Start(ctx)
@@ -936,10 +1170,15 @@ func main() {
 					}
 
 					// 2.2 Sync official closed trade history directly from MT5 terminal database
-					deals, historyErr := mt5Adapter.FetchHistoryDeals(ctx, 7.0)
+					deals, historyErr := mt5Adapter.FetchHistoryDeals(ctx, 30.0)
 					if historyErr == nil && len(deals) > 0 {
 						tradeHistoryMu.Lock()
-						completedTrades = make([]CompletedTrade, 0, len(deals))
+						// Merge deals instead of wiping existing loaded trade history
+						existingTickets := make(map[string]int, len(completedTrades))
+						for idx, ct := range completedTrades {
+							existingTickets[ct.Ticket] = idx
+						}
+
 						for _, d := range deals {
 							pipMult := model.PipMultiplier(d.Symbol)
 							pips := 0.0
@@ -973,7 +1212,13 @@ func main() {
 								ct.MaxFavorablePips = mfeRec.mfePips
 								ct.MaxAdversePips = mfeRec.maePips
 							}
-							completedTrades = append(completedTrades, ct)
+
+							if existingIdx, found := existingTickets[d.Ticket]; found {
+								completedTrades[existingIdx] = ct
+							} else {
+								completedTrades = append(completedTrades, ct)
+								existingTickets[d.Ticket] = len(completedTrades) - 1
+							}
 						}
 						tradeHistoryMu.Unlock()
 					}
@@ -1099,6 +1344,7 @@ func main() {
 						FloatingPips:       floatPips,
 						HoldingTimeSec:     holdSec,
 						PartialTPTriggered: p.PartialTPTriggered,
+						ProfitStage:        p.ProfitStage,
 						MFEUSD:             p.MaxFavorableUSD,
 						MAEUSD:             p.MaxAdverseUSD,
 						MFEPips:            p.MaxFavorablePips,
@@ -1249,10 +1495,12 @@ func main() {
 						})
 					}
 					if len(candles) > 0 {
+						clean := strings.ToUpper(strings.TrimRight(s, "cmCM."))
 						candleMap[s] = candles
 						candleMap[p.Symbol] = candles
-						candleMap[s+"c"] = candles
-						candleMap[strings.ToUpper(strings.TrimSuffix(s, "c"))] = candles
+						candleMap[clean] = candles
+						candleMap[clean+"c"] = candles
+						candleMap[clean+"m"] = candles
 					}
 				}
 				pipelineMu.RUnlock()
@@ -1268,8 +1516,36 @@ func main() {
 					accCurrStr = ac.(string)
 				}
 
+				nowTimeNs := time.Now().UnixNano()
+				var upcomingNews *web.NewsTelemetry
+				if ev, countdown, isBlackout, ok := calendarClient.GetUpcomingEvent("USD", cfg.News.BlackoutBefore, cfg.News.BlackoutAfter, nowTimeNs); ok && ev != nil {
+					evSec := ev.TimestampNs / 1e9
+					endSec := (ev.TimestampNs + cfg.News.BlackoutAfter.Nanoseconds()) / 1e9
+					remSec := int64(0)
+					if isBlackout {
+						remSec = (ev.TimestampNs + cfg.News.BlackoutAfter.Nanoseconds() - nowTimeNs) / 1e9
+						if remSec < 0 {
+							remSec = 0
+						}
+					}
+					upcomingNews = &web.NewsTelemetry{
+						Title:                ev.Title,
+						Currency:             ev.Currency,
+						Impact:               string(ev.Impact),
+						CountdownSec:         countdown,
+						IsBlackout:           isBlackout,
+						EventTimeSec:         evSec,
+						BlackoutEndSec:       endSec,
+						BlackoutRemainingSec: remSec,
+					}
+				}
+
+				var m runtime.MemStats
+				runtime.ReadMemStats(&m)
+				memAllocMB := float64(m.Alloc) / (1024.0 * 1024.0)
+
 				return web.TelemetryPayload{
-					TimestampNs:         time.Now().UnixNano(),
+					TimestampNs:         nowTimeNs,
 					BotStatus:           status,
 					CircuitBreaker:      riskMgr.IsCircuitOpen() || emergencyHalted.Load(),
 					Balance:             currBalance,
@@ -1283,6 +1559,7 @@ func main() {
 					ActivePositions:     posList,
 					Symbols:             symMap,
 					RecentEvents:        getRecentEvents(),
+					UpcomingNews:        upcomingNews,
 					AIFilterEnabled:     aiFilterEnabled.Load(),
 					TradingMode:         modeStr,
 					MarketFocus:         focusStr,
@@ -1290,6 +1567,8 @@ func main() {
 					AccountCurrency:     accCurrStr,
 					Performance:         perfStats,
 					LiveCandles:         candleMap,
+					TotalTicksProcessed: totalTicksProcessed.Load(),
+					MemoryAllocMB:       memAllocMB,
 				}
 			},
 		})
@@ -1305,6 +1584,87 @@ func main() {
 	// Goroutine A: Market feed → tick channel
 	if mt5Adapter != nil {
 		mt5Adapter.StreamTicks(ctx, tickCh)
+
+		// Goroutine A.2: MT5 Historical M5 Candle Backfill
+		go func() {
+			time.Sleep(1500 * time.Millisecond) // Let TCP socket complete initial handshake
+			log.Printf("[backfill] 🕯️ Requesting historical M5 candle backfill from MT5...")
+			for _, sym := range symbols {
+				candlesDTO, err := mt5Adapter.FetchCandles(ctx, sym, "M5", 100)
+				if err != nil {
+					log.Printf("[backfill] ⚠️ Could not fetch M5 candles for %s: %v", sym, err)
+					continue
+				}
+				if len(candlesDTO) > 0 {
+					log.Printf("[backfill] 🚀 Successfully fetched %d M5 bars from MT5 for %s!", len(candlesDTO), sym)
+					pipelineMu.Lock()
+					clean := normalizeSymbol(sym)
+					p, exists := pipelines[clean]
+					if !exists {
+						p = createSymbolPipeline(clean, cfg)
+						pipelines[clean] = p
+					}
+					pipelineMu.Unlock()
+
+					p.mu.Lock()
+					p.RecentCandles = make([]web.CandleTelemetry, len(candlesDTO))
+					for i, cd := range candlesDTO {
+						tele := web.CandleTelemetry{
+							Time:   cd.Time,
+							Open:   cd.Open,
+							High:   cd.High,
+							Low:    cd.Low,
+							Close:  cd.Close,
+							Volume: float64(cd.Volume),
+						}
+						p.RecentCandles[i] = tele
+
+						// Warm up strategy indicators (FastEMA, SlowEMA, ATR)
+						cModel := model.Candle{
+							Symbol:      sym,
+							Open:        cd.Open,
+							High:        cd.High,
+							Low:         cd.Low,
+							Close:       cd.Close,
+							Volume:      float64(cd.Volume),
+							TimestampNs: cd.Time * 1e9,
+						}
+						p.Strategy.OnCandle(cModel)
+
+						// Warm up Macro Confluence indicators & Trend
+						fastM5 := p.M5FastEMA.Update(cd.Close)
+						slowM5 := p.M5SlowEMA.Update(cd.Close)
+						if !math.IsNaN(fastM5) && !math.IsNaN(slowM5) {
+							if fastM5 > slowM5*1.0001 {
+								p.M5Trend = "BULLISH"
+							} else if fastM5 < slowM5*0.9999 {
+								p.M5Trend = "BEARISH"
+							} else {
+								p.M5Trend = "NEUTRAL"
+							}
+						}
+						if i%3 == 0 { // M15 approximation
+							fastM15 := p.M15FastEMA.Update(cd.Close)
+							slowM15 := p.M15SlowEMA.Update(cd.Close)
+							if !math.IsNaN(fastM15) && !math.IsNaN(slowM15) {
+								if fastM15 > slowM15*1.0001 {
+									p.M15Trend = "BULLISH"
+								} else if fastM15 < slowM15*0.9999 {
+									p.M15Trend = "BEARISH"
+								}
+							}
+						}
+					}
+					cachedCopy := make([]web.CandleTelemetry, len(p.RecentCandles))
+					copy(cachedCopy, p.RecentCandles)
+					p.mu.Unlock()
+
+					saveCandlesCache(sym, cachedCopy)
+					saveCandlesCache(clean, cachedCopy)
+					log.Printf("[backfill] ✅ Warm-up complete for %s (FastEMA=%.2f, SlowEMA=%.2f)", sym, p.Strategy.FastEMA(), p.Strategy.SlowEMA())
+				}
+			}
+		}()
 	} else {
 		for _, sym := range symbols {
 			go mockMarketFeed(ctx, sym, tickCh)
@@ -1325,6 +1685,7 @@ func main() {
 				if !ok {
 					return
 				}
+				totalTicksProcessed.Add(1)
 
 				symKey := normalizeSymbol(tick.Symbol)
 				if !strings.Contains(symKey, "XAU") && !strings.Contains(symKey, "GOLD") {
@@ -1351,7 +1712,7 @@ func main() {
 				}
 
 				nowTick := time.Now()
-				pipelineMu.Lock()
+				p.mu.Lock()
 				p.LastTickTime = nowTick
 				if p.High24h == 0 || tick.Bid > p.High24h {
 					p.High24h = tick.Bid
@@ -1368,7 +1729,7 @@ func main() {
 						p.Snapshots = p.Snapshots[len(p.Snapshots)-2880:]
 					}
 				}
-				pipelineMu.Unlock()
+				p.mu.Unlock()
 
 				p.Buffer.Push(tick)
 				mtfMgr.OnTick(tick)
@@ -1384,7 +1745,7 @@ func main() {
 				if m5Closed {
 					fastM5 := p.M5FastEMA.Update(m5Candle.Close)
 					slowM5 := p.M5SlowEMA.Update(m5Candle.Close)
-					pipelineMu.Lock()
+					p.mu.Lock()
 					if !math.IsNaN(fastM5) && !math.IsNaN(slowM5) {
 						if fastM5 > slowM5*1.0001 {
 							p.M5Trend = "BULLISH"
@@ -1394,7 +1755,7 @@ func main() {
 							p.M5Trend = "NEUTRAL"
 						}
 					}
-					pipelineMu.Unlock()
+					p.mu.Unlock()
 				}
 
 				if m15Closed {
@@ -1409,7 +1770,7 @@ func main() {
 						}
 					}
 
-					pipelineMu.Lock()
+					p.mu.Lock()
 					if !math.IsNaN(fastM15) && !math.IsNaN(slowM15) {
 						if fastM15 > slowM15*1.0001 {
 							p.M15Trend = "BULLISH"
@@ -1419,7 +1780,7 @@ func main() {
 							p.M15Trend = "NEUTRAL"
 						}
 					}
-					pipelineMu.Unlock()
+					p.mu.Unlock()
 
 					// Feed completed M15 candle into Gaussian HMM Engine
 					hmmState, hmmConf := p.AIFilter.UpdateHMM(m15Candle, atrM15)
@@ -1430,7 +1791,7 @@ func main() {
 				if h1Closed {
 					fastH1 := p.H1FastEMA.Update(h1Candle.Close)
 					slowH1 := p.H1SlowEMA.Update(h1Candle.Close)
-					pipelineMu.Lock()
+					p.mu.Lock()
 					if !math.IsNaN(fastH1) && !math.IsNaN(slowH1) {
 						if fastH1 > slowH1*1.0001 {
 							p.H1Trend = "BULLISH"
@@ -1440,7 +1801,7 @@ func main() {
 							p.H1Trend = "NEUTRAL"
 						}
 					}
-					pipelineMu.Unlock()
+					p.mu.Unlock()
 					log.Printf("[macro-h1] 🏛️ %s H1 Macro Trend: %s", symKey, p.H1Trend)
 				}
 
@@ -1456,11 +1817,11 @@ func main() {
 					telemetry.RecordClose(ce)
 					if ce.IsPartial {
 						log.Printf("[tracker] partial close: %s lots=%.2f reason=%s", ce.OrderID, ce.Lots, ce.Reason)
-						_ = activeBroker.Close(ctx, ce.OrderID)
+						_ = activeBroker.ClosePartial(ctx, ce.OrderID, ce.Lots)
 						_ = alerter.Send(ctx, notifier.Alert{
 							Level:     notifier.AlertInfo,
 							Title:     "Partial TP Executed",
-							Message:   fmt.Sprintf("Order %s closed %.2f lots (%s)", ce.OrderID, ce.Lots, ce.Reason),
+							Message:   fmt.Sprintf("Order %s partially closed %.2f lots (%s)", ce.OrderID, ce.Lots, ce.Reason),
 							Timestamp: time.Now(),
 						})
 					} else {
@@ -1469,6 +1830,11 @@ func main() {
 							mfeUSD: ce.MaxFavorableUSD, maeUSD: ce.MaxAdverseUSD, mfePips: ce.MaxFavorablePips, maePips: ce.MaxAdversePips,
 						}
 						mfeRecordsMu.Unlock()
+
+						if ce.Reason == "TIME_STOP_HIT" {
+							log.Printf("[tracker] closing stagnant/time-stop position %s in broker", ce.OrderID)
+							_ = activeBroker.Close(ctx, ce.OrderID)
+						}
 
 						if mt5Adapter == nil {
 							riskMgr.RecordClose(ce.PnL)
@@ -1520,7 +1886,13 @@ func main() {
 					}
 				}
 
-
+				// Propagate active position SL/TP modifications (Break-Even & Trailing Stop) to broker
+				for _, me := range tracker.DrainModifications() {
+					log.Printf("[tracker] 🛡️ updating SL/TP in broker for %s: SL=%.5f TP=%.5f", me.OrderID, me.StopLoss, me.TakeProfit)
+					if err := activeBroker.ModifyPosition(ctx, me.OrderID, me.StopLoss, me.TakeProfit); err != nil {
+						log.Printf("[tracker] warning: failed to modify broker position %s: %v", me.OrderID, err)
+					}
+				}
 
 				// Tick strategy — ONLY if no candle closes on this tick
 				// (prevents duplicate signals when OnTick + OnCandle fire simultaneously)
@@ -1531,8 +1903,7 @@ func main() {
 				if candle, closed := p.Aggregator.OnTick(tick); closed {
 					candleClosedThisTick = true
 					// Store rolling candles for TradingView Lightweight Charts
-					pipelineMu.Lock()
-					p.RecentCandles = append(p.RecentCandles, web.CandleTelemetry{
+					p.AddRecentCandle(web.CandleTelemetry{
 						Time:   candle.TimestampNs / 1e9,
 						Open:   candle.Open,
 						High:   candle.High,
@@ -1540,10 +1911,6 @@ func main() {
 						Close:  candle.Close,
 						Volume: candle.Volume,
 					})
-					if len(p.RecentCandles) > 100 {
-						p.RecentCandles = p.RecentCandles[len(p.RecentCandles)-100:]
-					}
-					pipelineMu.Unlock()
 
 					// 1. Evaluate Momentum Scalper (Trend Mode)
 					sigTrend := p.Strategy.OnCandle(candle)
@@ -1614,23 +1981,67 @@ func main() {
 				nowStr := time.Now().Format("15:04:05")
 				prof := model.DetectAssetClass(sig.Symbol)
 
-				// 0.15 Gate 1: Hard Macro Trend Lock (M15 & H1 Macro Confluence)
-				// STRICT RULE: No BUY during H1/M15 Bearish Downtrend, No SELL during H1/M15 Bullish Uptrend
-				pipelineMu.RLock()
+				// 0.1 Gate 0: London Open Trap Blackout (14:00 - 14:45 WIB)
+				// Empirically proven: 14:00 session generated 80% of historical losses (-$149, 6.7% win rate) due to institutional Judas swings.
+				wibTime := time.Now().UTC().Add(7 * time.Hour)
+				if wibTime.Hour() == 14 && wibTime.Minute() < 45 {
+					londonTrapReason := "Gate 0: London Open Trap Blackout (14:00 - 14:45 WIB pause protects against Judas swings)"
+					log.Printf("[session-guard] 🛑 LONDON TRAP BLACKOUT: %s %s — %s", sig.Type.String(), symKey, londonTrapReason)
+					p.SetSignalStatus(sig.Type.String(), "REJECTED", londonTrapReason, nowStr)
+					recordSignalEvent(web.SignalEvent{
+						Time:    nowStr,
+						Symbol:  sig.Symbol,
+						Type:    sig.Type.String(),
+						Price:   lastTick.MidPrice(),
+						Status:  "REJECTED",
+						Regime:  "LONDON_OPEN_BLACKOUT",
+						ConfPct: 0.0,
+						Reason:  londonTrapReason,
+					})
+					continue
+				}
+
+				// 0.12 Gate 0.5: Spread Anomaly Spike Guard (Anti-Slippage Freeze)
+				if p.SpreadFilter != nil {
+					if allowed, reason := p.SpreadFilter.Allow(lastTick); !allowed {
+						spreadSpikeReason := fmt.Sprintf("Gate 0.5: Spread Anomaly Spike — %s", reason)
+						log.Printf("[risk-guard] 🛑 SPREAD SPIKE: %s %s — %s", sig.Type.String(), symKey, spreadSpikeReason)
+						p.SetSignalStatus(sig.Type.String(), "REJECTED", spreadSpikeReason, nowStr)
+						recordSignalEvent(web.SignalEvent{
+							Time:    nowStr,
+							Symbol:  sig.Symbol,
+							Type:    sig.Type.String(),
+							Price:   lastTick.MidPrice(),
+							Status:  "REJECTED",
+							Regime:  "SPREAD_SPIKE_LOCK",
+							ConfPct: 0.0,
+							Reason:  spreadSpikeReason,
+						})
+						continue
+					}
+				}
+
+				// 0.15 Gate 1: Hard Macro Trend Lock (M5 / M15 / H1 Hierarchical Confluence)
+				// STRICT RULE: No BUY during Bearish Trend, No SELL during Bullish Trend
+				p.mu.RLock()
+				m5Trend := p.M5Trend
 				m15Trend := p.M15Trend
 				h1Trend := p.H1Trend
-				pipelineMu.RUnlock()
+				p.mu.RUnlock()
 
-				if h1Trend == "BEARISH" && sig.Type == model.Buy {
-					htfReason := fmt.Sprintf("Gate 1: BUY forbidden during H1 Bearish Macro Trend (H1=%s, M15=%s)", h1Trend, m15Trend)
+				effectiveTrend := h1Trend
+				if effectiveTrend == "NEUTRAL" {
+					effectiveTrend = m15Trend
+				}
+				if effectiveTrend == "NEUTRAL" {
+					effectiveTrend = m5Trend
+				}
+
+				if effectiveTrend == "BEARISH" && sig.Type == model.Buy {
+					htfReason := fmt.Sprintf("Gate 1: BUY forbidden during %s Bearish Trend (H1=%s, M15=%s, M5=%s)", effectiveTrend, h1Trend, m15Trend, m5Trend)
 					log.Printf("[macro-trend] 🛑 COUNTER-TREND REJECTED: %s %s — %s", sig.Type.String(), symKey, htfReason)
 
-					pipelineMu.Lock()
-					p.LastSignal = sig.Type.String()
-					p.SignalStatus = "REJECTED"
-					p.SignalReason = htfReason
-					p.SignalTime = nowStr
-					pipelineMu.Unlock()
+					p.SetSignalStatus(sig.Type.String(), "REJECTED", htfReason, nowStr)
 
 					recordSignalEvent(web.SignalEvent{
 						Time:    nowStr,
@@ -1643,16 +2054,11 @@ func main() {
 						Reason:  htfReason,
 					})
 					continue
-				} else if h1Trend == "BULLISH" && sig.Type == model.Sell {
-					htfReason := fmt.Sprintf("Gate 1: SELL forbidden during H1 Bullish Macro Trend (H1=%s, M15=%s)", h1Trend, m15Trend)
+				} else if effectiveTrend == "BULLISH" && sig.Type == model.Sell {
+					htfReason := fmt.Sprintf("Gate 1: SELL forbidden during %s Bullish Trend (H1=%s, M15=%s, M5=%s)", effectiveTrend, h1Trend, m15Trend, m5Trend)
 					log.Printf("[macro-trend] 🛑 COUNTER-TREND REJECTED: %s %s — %s", sig.Type.String(), symKey, htfReason)
 
-					pipelineMu.Lock()
-					p.LastSignal = sig.Type.String()
-					p.SignalStatus = "REJECTED"
-					p.SignalReason = htfReason
-					p.SignalTime = nowStr
-					pipelineMu.Unlock()
+					p.SetSignalStatus(sig.Type.String(), "REJECTED", htfReason, nowStr)
 
 					recordSignalEvent(web.SignalEvent{
 						Time:    nowStr,
@@ -1665,12 +2071,61 @@ func main() {
 						Reason:  htfReason,
 					})
 					continue
+				} else if effectiveTrend == "NEUTRAL" {
+					htfReason := "Gate 1: Waiting for initial trend formation (M5/M15/H1 warming up)"
+					log.Printf("[macro-trend] ⏳ WARMING UP: %s %s — %s", sig.Type.String(), symKey, htfReason)
+					p.SetSignalStatus(sig.Type.String(), "SKIPPED", htfReason, nowStr)
+					continue
 				}
 
-				if h1Trend == "BULLISH" && m15Trend == "BEARISH" && sig.Type == model.Buy {
-					log.Printf("[macro-trend] 💎 GOLDEN PULLBACK SETUP: %s BUY dip retest within H1 Bullish institutional trend", symKey)
-				} else if h1Trend == "BEARISH" && m15Trend == "BULLISH" && sig.Type == model.Sell {
-					log.Printf("[macro-trend] 💎 GOLDEN PULLBACK SETUP: %s SELL rally retest within H1 Bearish institutional trend", symKey)
+				if (h1Trend == "BULLISH" || m15Trend == "BULLISH") && sig.Type == model.Buy {
+					log.Printf("[macro-trend] 💎 GOLDEN PULLBACK SETUP: %s BUY dip retest within Bullish trend", symKey)
+				} else if (h1Trend == "BEARISH" || m15Trend == "BEARISH") && sig.Type == model.Sell {
+					log.Printf("[macro-trend] 💎 GOLDEN PULLBACK SETUP: %s SELL rally retest within Bearish trend", symKey)
+				}
+
+				// 0.18 Gate 1.5: Key Level 24H Liquidity Guard (No buying into 24H High, no selling into 24H Low)
+				atrVal := p.Strategy.ATR()
+				if atrVal <= 0 {
+					atrVal = 3.50
+				}
+				p.mu.RLock()
+				high24h := p.High24h
+				low24h := p.Low24h
+				p.mu.RUnlock()
+
+				if high24h > 0 && low24h > 0 && high24h > low24h {
+					if sig.Type == model.Buy && (high24h-lastTick.Ask) < atrVal*0.35 {
+						keyReason := fmt.Sprintf("Gate 1.5: Key Level Guard — BUY forbidden within $%.2f (<0.35x ATR) of 24H High ($%.2f)", high24h-lastTick.Ask, high24h)
+						log.Printf("[key-level] 🛑 RESISTANCE CEILING: %s %s — %s", sig.Type.String(), symKey, keyReason)
+						p.SetSignalStatus(sig.Type.String(), "REJECTED", keyReason, nowStr)
+						recordSignalEvent(web.SignalEvent{
+							Time:    nowStr,
+							Symbol:  sig.Symbol,
+							Type:    sig.Type.String(),
+							Price:   lastTick.MidPrice(),
+							Status:  "REJECTED",
+							Regime:  "KEY_LEVEL_RESISTANCE",
+							ConfPct: 0.0,
+							Reason:  keyReason,
+						})
+						continue
+					} else if sig.Type == model.Sell && (lastTick.Bid-low24h) < atrVal*0.35 {
+						keyReason := fmt.Sprintf("Gate 1.5: Key Level Guard — SELL forbidden within $%.2f (<0.35x ATR) of 24H Low ($%.2f)", lastTick.Bid-low24h, low24h)
+						log.Printf("[key-level] 🛑 SUPPORT FLOOR: %s %s — %s", sig.Type.String(), symKey, keyReason)
+						p.SetSignalStatus(sig.Type.String(), "REJECTED", keyReason, nowStr)
+						recordSignalEvent(web.SignalEvent{
+							Time:    nowStr,
+							Symbol:  sig.Symbol,
+							Type:    sig.Type.String(),
+							Price:   lastTick.MidPrice(),
+							Status:  "REJECTED",
+							Regime:  "KEY_LEVEL_SUPPORT",
+							ConfPct: 0.0,
+							Reason:  keyReason,
+						})
+						continue
+					}
 				}
 
 				// 0.2 Multi-Timeframe Confluence Guard (M1 + M5 + H1 Alignment)
@@ -1679,12 +2134,7 @@ func main() {
 					log.Printf("[mtf-confluence] 🛑 HTF CONFLICT: %s %s (score=%.0f%%) — %s",
 						sig.Type.String(), sig.Symbol, mtfScore*100.0, mtfReason)
 
-					pipelineMu.Lock()
-					p.LastSignal = sig.Type.String()
-					p.SignalStatus = "REJECTED"
-					p.SignalReason = mtfReason
-					p.SignalTime = nowStr
-					pipelineMu.Unlock()
+					p.SetSignalStatus(sig.Type.String(), "REJECTED", mtfReason, nowStr)
 
 					recordSignalEvent(web.SignalEvent{
 						Time:    nowStr,
@@ -1699,7 +2149,7 @@ func main() {
 					continue
 				}
 
-				atrVal := p.Strategy.ATR()
+				atrVal = p.Strategy.ATR()
 				if atrVal <= 0 {
 					atrVal = cfg.Strategy.ATRMinimum
 				}
@@ -1732,12 +2182,7 @@ func main() {
 						log.Printf("[ai-filter] 🛑 %s %s (regime=%s, conf=%.1f%%) — %s",
 							sig.Type.String(), sig.Symbol, regime.String(), aiConf*100.0, cleanReason)
 
-						pipelineMu.Lock()
-						p.LastSignal = sig.Type.String()
-						p.SignalStatus = "REJECTED"
-						p.SignalReason = cleanReason
-						p.SignalTime = nowStr
-						pipelineMu.Unlock()
+						p.SetSignalStatus(sig.Type.String(), "REJECTED", cleanReason, nowStr)
 
 						recordSignalEvent(web.SignalEvent{
 							Time:    nowStr,
@@ -1761,12 +2206,7 @@ func main() {
 					log.Printf("[ai-filter] ✅ SIGNAL APPROVED: %s %s (%s, regime=%s, confidence=%.1f%%)",
 						sig.Type.String(), sig.Symbol, stratLabel, regime.String(), aiConf*100.0)
 
-					pipelineMu.Lock()
-					p.LastSignal = sig.Type.String()
-					p.SignalStatus = "APPROVED"
-					p.SignalReason = cleanApproved
-					p.SignalTime = nowStr
-					pipelineMu.Unlock()
+					p.SetSignalStatus(sig.Type.String(), "APPROVED", cleanApproved, nowStr)
 
 					recordSignalEvent(web.SignalEvent{
 						Time:    nowStr,
@@ -1793,11 +2233,7 @@ func main() {
 					cooldownReason := fmt.Sprintf("Anti-Revenge Pause: resting 300s after loss (%ds remaining)", remSec)
 					log.Printf("[pipeline] 🛡️ COOLDOWN SKIPPED: %s %s", symKey, cooldownReason)
 
-					pipelineMu.Lock()
-					p.SignalStatus = "SKIPPED"
-					p.SignalReason = cooldownReason
-					p.SignalTime = nowStr
-					pipelineMu.Unlock()
+					p.SetSignalStatus("", "SKIPPED", cooldownReason, nowStr)
 
 					recordSignalEvent(web.SignalEvent{
 						Time:    nowStr,
@@ -1818,11 +2254,7 @@ func main() {
 					spacingReason := fmt.Sprintf("Order Spacing Rate Limit: (%ds remaining)", remSec)
 					log.Printf("[pipeline] ⏱️ THROTTLE SKIPPED: %s %s", symKey, spacingReason)
 
-					pipelineMu.Lock()
-					p.SignalStatus = "SKIPPED"
-					p.SignalReason = spacingReason
-					p.SignalTime = nowStr
-					pipelineMu.Unlock()
+					p.SetSignalStatus("", "SKIPPED", spacingReason, nowStr)
 
 					recordSignalEvent(web.SignalEvent{
 						Time:    nowStr,
@@ -1863,11 +2295,7 @@ func main() {
 						curPrice, dupEntryPrice, minPipSeparation)
 					log.Printf("[pipeline] ⏭️ DUPLICATE SKIPPED: %s %s", symKey, dupReason)
 
-					pipelineMu.Lock()
-					p.SignalStatus = "SKIPPED"
-					p.SignalReason = dupReason
-					p.SignalTime = nowStr
-					pipelineMu.Unlock()
+					p.SetSignalStatus("", "SKIPPED", dupReason, nowStr)
 
 					recordSignalEvent(web.SignalEvent{
 						Time:    nowStr,
@@ -1903,8 +2331,25 @@ func main() {
 				// 3. Risk Engine Evaluation
 				order, err := riskMgr.Evaluate(sig, lastTick, atrVal)
 				if err != nil {
-					log.Printf("[risk] signal rejected: %s %s — %v",
-						sig.Type, sig.Symbol, err)
+					riskReason := fmt.Sprintf("Risk Veto: %v", err)
+					if strings.Contains(riskReason, "news-blackout") {
+						riskReason = "Blackout Veto: High-impact economic news active (Core CPI/NFP)"
+					}
+					log.Printf("[risk] signal rejected: %s %s — %s",
+						sig.Type, sig.Symbol, riskReason)
+
+					p.SetSignalStatus(sig.Type.String(), "REJECTED", riskReason, nowStr)
+
+					recordSignalEvent(web.SignalEvent{
+						Time:    nowStr,
+						Symbol:  sig.Symbol,
+						Type:    sig.Type.String(),
+						Price:   lastTick.MidPrice(),
+						Status:  "REJECTED",
+						Regime:  "RISK_BLACKOUT",
+						ConfPct: 0.0,
+						Reason:  riskReason,
+					})
 
 					if riskMgr.IsCircuitOpen() {
 						_ = alerter.Send(ctx, notifier.Alert{
@@ -1918,12 +2363,16 @@ func main() {
 				}
 
 				// 3.1 Small-Capital Lot Sizing Precision & Asset Cap
+				if cfg.Risk.MaxLotSize > 0 && order.Lots > cfg.Risk.MaxLotSize {
+					order.Lots = cfg.Risk.MaxLotSize
+				}
 				if order.Lots > prof.MaxLots {
 					order.Lots = prof.MaxLots
 				}
 				if order.Lots < 0.01 {
 					order.Lots = 0.01
 				}
+				order.Lots = math.Round(order.Lots*100) / 100
 
 				// 3.2 Small-Capital Margin Safety Buffer
 				currFreeMargin := getLiveFloat(&liveFreeMargin, getLiveFloat(&liveBalance, cfg.Risk.InitialEquity))
@@ -1940,64 +2389,61 @@ func main() {
 					mode = m.(TradingMode)
 				}
 
+				execPrice := lastTick.Ask
+				if sig.Type == model.Sell {
+					execPrice = lastTick.Bid
+				}
+
 				if sig.StopLoss > 0 && sig.TakeProfit > 0 {
-					baseSLDist := math.Abs(lastTick.MidPrice() - sig.StopLoss)
-					if baseSLDist <= 0 {
-						baseSLDist = atrVal
+					// Dynamic Volatility & Structure SL/TP Engine:
+					// Preserves structure-based swing invalidation while enforcing
+					// volatility floors ($3.50 min) and risk caps ($6.50 max) on Gold.
+					structSLDist := math.Abs(execPrice - sig.StopLoss)
+					minSL := 3.50
+					maxSL := 6.50
+					if !prof.IsGold {
+						minSL = prof.MinSLDistance
+						maxSL = prof.MinSLDistance * 3.0
 					}
 
-					var slDist, tpDist float64
+					// Dynamic mode scaling
 					switch mode {
 					case ModeSantai:
-						// Wide trend swings: SL = 1.0x, TP = 2.5x (High RRR 1 : 2.5)
-						slDist = baseSLDist * 1.0
-						tpDist = baseSLDist * 2.5
+						minSL *= 1.2
+						maxSL *= 1.2
 					case ModeAgresif:
-						// Ultra-fast micro-scalp: tight SL = 0.8x, swift TP = 1.6x (High RRR 1 : 2.0)
-						slDist = baseSLDist * 0.8
-						tpDist = baseSLDist * 1.6
-					default: // ModeBalanced
-						// Standard quant scalp: SL = 1.0x, TP = 2.0x (Standard RRR 1 : 2.0)
-						slDist = baseSLDist * 1.0
-						tpDist = baseSLDist * 2.0
+						maxSL = math.Min(maxSL, 5.00)
 					}
 
-					// Structural Swing Floor: Ensure sufficient room for Gold swings + spread
-					if slDist < prof.MinSLDistance {
-						slDist = prof.MinSLDistance
-					}
-					if prof.IsGold && slDist < 3.50 {
-						slDist = 3.50 // Healthy $3.50 room on Gold to avoid being shaken out by normal pullbacks
-					}
-					if tpDist < prof.MinTPDistance {
-						tpDist = prof.MinTPDistance
-					}
-
-					// Hard-Cap Ceiling: M15/H1 Gold Swing Mode — wider SL/TP allowed
-					// Gold SL capped at $6.00 max, TP capped at MaxTPDistance ($25.00)
-					if prof.IsGold && slDist > 6.00 {
-						slDist = 6.00
-					}
-					if tpDist > prof.MaxTPDistance {
-						tpDist = prof.MaxTPDistance
-					}
-
-					// Mathematical Guard: Guarantee TP is strictly at least 2.0x SL (Never risk more than reward)
-					if tpDist < slDist*2.0 {
-						tpDist = slDist * 2.0
-					}
-
-					execPrice := lastTick.Ask
-					if sig.Type == model.Sell {
-						execPrice = lastTick.Bid
+					if structSLDist < minSL {
+						structSLDist = minSL
+					} else if structSLDist > maxSL {
+						structSLDist = maxSL
 					}
 
 					if sig.Type == model.Buy {
-						order.StopLoss = execPrice - slDist
-						order.TakeProfit = execPrice + tpDist
+						order.StopLoss = execPrice - structSLDist
 					} else {
-						order.StopLoss = execPrice + slDist
-						order.TakeProfit = execPrice - tpDist
+						order.StopLoss = execPrice + structSLDist
+					}
+
+					// Guarantee Reward-to-Risk ratio >= 2.2x
+					structTPDist := math.Abs(sig.TakeProfit - execPrice)
+					minTPDist := structSLDist * 2.2
+					if prof.IsGold && minTPDist < 8.00 {
+						minTPDist = 8.00
+					}
+					if structTPDist < minTPDist {
+						structTPDist = minTPDist
+					}
+					if prof.IsGold && structTPDist > 25.00 {
+						structTPDist = 25.00
+					}
+
+					if sig.Type == model.Buy {
+						order.TakeProfit = execPrice + structTPDist
+					} else {
+						order.TakeProfit = execPrice - structTPDist
 					}
 				} else {
 					if sig.StopLoss > 0 {

@@ -29,6 +29,15 @@ func TestTelegramInteractiveBotInit(t *testing.T) {
 		CloseAllTrades: func() (int, error) {
 			return 0, nil
 		},
+		TogglePause: func(pause bool) bool {
+			return pause
+		},
+		GetTodayReport: func() string {
+			return "mock report"
+		},
+		GetPriceQuote: func() string {
+			return "mock quote"
+		},
 	}
 
 	bot := NewTelegramInteractiveBot("mock-token", "123456", cb)
