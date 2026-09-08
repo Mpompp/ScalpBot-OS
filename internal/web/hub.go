@@ -38,6 +38,7 @@ type TelemetryPayload struct {
 	LiveCandles         map[string][]CandleTelemetry `json:"live_candles,omitempty"`
 	TotalTicksProcessed int64                        `json:"total_ticks_processed,omitempty"`
 	MemoryAllocMB       float64                      `json:"memory_alloc_mb,omitempty"`
+	ActiveLotSize       float64                      `json:"active_lot_size,omitempty"`
 }
 
 type CandleTelemetry struct {

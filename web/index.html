@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=4.7">
+  <link rel="stylesheet" href="css/style.css?v=4.8">
   <!-- TradingView Lightweight Charts Library (Local Offline-Ready Bundle) -->
   <script src="js/lightweight-charts.js"></script>
 </head>
@@ -58,6 +58,20 @@
         <div class="account-badge" id="accountBadge" title="Auto-Detected Account Environment">
           <span id="accountBadgeIcon">💎</span>
           <span id="accountBadgeText">REGULAR ACCOUNT (USD)</span>
+        </div>
+      </div>
+
+      <!-- DIRECT MANUAL LOT SIZE CONTROLLER -->
+      <div class="lot-switcher-bar" title="Direct Lot Sizing (Instant Override)">
+        <span class="mode-label">LOT:</span>
+        <div class="lot-input-wrapper">
+          <input type="number" id="inputCustomLot" class="input-custom-lot" step="0.01" min="0.01" max="10.0" value="0.01">
+          <button id="btnApplyLot" class="btn-lot-set" onclick="window.app.applyCustomLot()">SET</button>
+        </div>
+        <div class="lot-quick-pills">
+          <button class="pill-lot-btn active" id="pillLot001" onclick="window.app.setQuickLot(0.01)">0.01</button>
+          <button class="pill-lot-btn" id="pillLot005" onclick="window.app.setQuickLot(0.05)">0.05</button>
+          <button class="pill-lot-btn" id="pillLot010" onclick="window.app.setQuickLot(0.10)">0.10</button>
         </div>
       </div>
 
@@ -523,6 +537,6 @@
     </footer>
   </div>
 
-  <script src="js/app.js?v=4.7"></script>
+  <script src="js/app.js?v=4.8"></script>
 </body>
 </html>

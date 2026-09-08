@@ -627,6 +627,9 @@ class DashboardApp {
     if (p.account_type) {
       this.updateAccountBadge(p.account_type, p.account_currency);
     }
+    if (p.active_lot_size) {
+      this.updateLotUI(p.active_lot_size);
+    }
 
     // 1. Update MT5 Bridge Connection Status & Broker Health
     if (p.symbols) {
@@ -2091,6 +2094,54 @@ class DashboardApp {
     } catch (e) {
       alert('Error connecting to backend: ' + e);
     }
+  }
+
+  setQuickLot(lot) {
+    const input = document.getElementById('inputCustomLot');
+    if (input) input.value = lot.toFixed(2);
+    this.sendLotChange(lot);
+  }
+
+  applyCustomLot() {
+    const input = document.getElementById('inputCustomLot');
+    if (!input) return;
+    const lot = parseFloat(input.value);
+    if (isNaN(lot) || lot < 0.01 || lot > 10.0) {
+      alert('Masukkan ukuran lot antara 0.01 sampai 10.0');
+      return;
+    }
+    this.sendLotChange(lot);
+  }
+
+  async sendLotChange(lot) {
+    try {
+      const res = await fetch('/api/control/set-lot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lot: lot })
+      });
+      const data = await res.json();
+      if (data.success || data.status === 'ok') {
+        this.updateLotUI(lot);
+      } else {
+        alert('Gagal mengubah lot: ' + (data.error || 'Unknown error'));
+      }
+    } catch (e) {
+      console.error('Failed to change lot:', e);
+    }
+  }
+
+  updateLotUI(lot) {
+    const input = document.getElementById('inputCustomLot');
+    if (input && document.activeElement !== input) {
+      input.value = lot.toFixed(2);
+    }
+    const p1 = document.getElementById('pillLot001');
+    const p5 = document.getElementById('pillLot005');
+    const p10 = document.getElementById('pillLot010');
+    if (p1) p1.classList.toggle('active', Math.abs(lot - 0.01) < 0.001);
+    if (p5) p5.classList.toggle('active', Math.abs(lot - 0.05) < 0.001);
+    if (p10) p10.classList.toggle('active', Math.abs(lot - 0.10) < 0.001);
   }
 
   async closePosition(orderID) {

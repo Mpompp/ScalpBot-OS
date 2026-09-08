@@ -816,6 +816,13 @@ func main() {
 	setLiveFloat(&liveEquity, cfg.Risk.InitialEquity)
 	setLiveFloat(&liveFreeMargin, cfg.Risk.InitialEquity)
 
+	var activeUserLot atomic.Uint64
+	initialLot := 0.01
+	if cfg.Risk.MinLotSize > 0 {
+		initialLot = cfg.Risk.MinLotSize
+	}
+	setLiveFloat(&activeUserLot, initialLot)
+
 	currentMarketFocus.Store(FocusGoldOnly)
 	mtfMgr := marketdata.NewMultiTimeframeManager(100)
 
@@ -906,6 +913,14 @@ func main() {
 					count++
 				}
 				return count, nil
+			},
+			SetLotSize: func(lots float64) error {
+				if lots < 0.01 || lots > 10.0 {
+					return fmt.Errorf("lot out of range: %.2f (must be 0.01 - 10.0)", lots)
+				}
+				setLiveFloat(&activeUserLot, lots)
+				log.Printf("[telegram-control] 🎯 USER LOT UPDATED TO: %.2f lots", lots)
+				return nil
 			},
 			TogglePause: func(pause bool) bool {
 				emergencyHalted.Store(pause)
@@ -1290,6 +1305,14 @@ func main() {
 				})
 				return nil
 			},
+			OnSetLot: func(lot float64) error {
+				if lot < 0.01 || lot > 10.0 {
+					return fmt.Errorf("invalid lot: %.2f (must be 0.01 - 10.0)", lot)
+				}
+				setLiveFloat(&activeUserLot, lot)
+				log.Printf("[web-control] 🎯 USER LOT ATOMICALLY UPDATED TO: %.2f lots", lot)
+				return nil
+			},
 			GetTelemetry: func() web.TelemetryPayload {
 				tracked := tracker.ActivePositions()
 				posList := make([]web.PositionTelemetry, len(tracked))
@@ -1569,6 +1592,7 @@ func main() {
 					LiveCandles:         candleMap,
 					TotalTicksProcessed: totalTicksProcessed.Load(),
 					MemoryAllocMB:       memAllocMB,
+					ActiveLotSize:       getLiveFloat(&activeUserLot, 0.01),
 				}
 			},
 		})
@@ -2362,15 +2386,10 @@ func main() {
 					continue
 				}
 
-				// 3.1 Small-Capital Lot Sizing Precision & Asset Cap
-				if cfg.Risk.MaxLotSize > 0 && order.Lots > cfg.Risk.MaxLotSize {
-					order.Lots = cfg.Risk.MaxLotSize
-				}
-				if order.Lots > prof.MaxLots {
-					order.Lots = prof.MaxLots
-				}
-				if order.Lots < 0.01 {
-					order.Lots = 0.01
+				// 3.1 Direct User Lot Sizing (Manual Priority: whatever user sets in Dashboard/Telegram/Flag)
+				userCustomLot := getLiveFloat(&activeUserLot, 0.01)
+				if userCustomLot >= 0.01 {
+					order.Lots = userCustomLot
 				}
 				order.Lots = math.Round(order.Lots*100) / 100
 

@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -16,6 +17,7 @@ type ServerCallbacks struct {
 	OnToggleAI      func(enable bool) bool
 	OnSetMode       func(mode string) error
 	OnSetFocus      func(focus string) error
+	OnSetLot        func(lot float64) error
 	GetTelemetry    func() TelemetryPayload
 }
 
@@ -48,6 +50,7 @@ func NewServer(addr string, callbacks ServerCallbacks) *Server {
 	mux.HandleFunc("/api/control/toggle-ai", s.handleToggleAI)
 	mux.HandleFunc("/api/control/set-mode", s.handleSetMode)
 	mux.HandleFunc("/api/control/set-focus", s.handleSetFocus)
+	mux.HandleFunc("/api/control/set-lot", s.handleSetLot)
 	mux.HandleFunc("/api/control/close-position", s.handleClosePosition)
 
 	// 3. Static Files (Zero browser caching)
@@ -244,4 +247,35 @@ func (s *Server) handleClosePosition(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "status": "ok", "order_id": req.OrderID})
+}
+
+func (s *Server) handleSetLot(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Lot float64 `json:"lot"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Lot <= 0 {
+		http.Error(w, "Invalid lot size", http.StatusBadRequest)
+		return
+	}
+
+	if s.callbacks.OnSetLot != nil {
+		if err := s.callbacks.OnSetLot(req.Lot); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": false, "status": "error", "error": err.Error()})
+			return
+		}
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success": true,
+		"status":  "ok",
+		"lot":     req.Lot,
+		"message": fmt.Sprintf("Lot size updated to %.2f lots", req.Lot),
+	})
 }

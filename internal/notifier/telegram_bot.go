@@ -45,6 +45,7 @@ type BotCallbacks struct {
 	TogglePause    func(pause bool) bool
 	GetTodayReport func() string
 	GetPriceQuote  func() string
+	SetLotSize     func(lots float64) error
 }
 
 // TelegramInteractiveBot manages 2-way communication with Telegram.
@@ -290,6 +291,8 @@ func (b *TelegramInteractiveBot) handleTextMessage(ctx context.Context, msg *tgM
 		b.applyFocusChange(ctx, "GOLD_ONLY")
 	case cmd == "/closeall" || cmd == "closeall":
 		b.applyCloseAll(ctx)
+	case strings.HasPrefix(cmd, "/lot ") || strings.HasPrefix(cmd, "/lots ") || strings.HasPrefix(cmd, "lot "):
+		b.handleLotCommand(ctx, msg.Text)
 	case cmd == "/ping" || cmd == "ping":
 		b.sendPingStatus(ctx)
 	default:
@@ -325,7 +328,39 @@ func (b *TelegramInteractiveBot) handleCallbackQuery(ctx context.Context, cb *tg
 		b.applyFocusChange(ctx, "GOLD_ONLY")
 	case "cb_close_all":
 		b.applyCloseAll(ctx)
+	case "cb_lot_001":
+		b.applyLotChange(ctx, 0.01)
+	case "cb_lot_005":
+		b.applyLotChange(ctx, 0.05)
+	case "cb_lot_010":
+		b.applyLotChange(ctx, 0.10)
 	}
+}
+
+func (b *TelegramInteractiveBot) handleLotCommand(ctx context.Context, text string) {
+	parts := strings.Fields(text)
+	if len(parts) < 2 {
+		_ = b.sendMessageWithKeyboard(ctx, "⚠️ Format salah. Contoh: <code>/lot 0.05</code>", b.buildControlKeyboard(b.isPaused))
+		return
+	}
+	var lot float64
+	_, err := fmt.Sscanf(parts[1], "%f", &lot)
+	if err != nil || lot < 0.01 || lot > 10.0 {
+		_ = b.sendMessageWithKeyboard(ctx, "⚠️ Nilai lot tidak valid. Masukkan angka 0.01 s/d 10.0", b.buildControlKeyboard(b.isPaused))
+		return
+	}
+	b.applyLotChange(ctx, lot)
+}
+
+func (b *TelegramInteractiveBot) applyLotChange(ctx context.Context, lot float64) {
+	if b.callbacks.SetLotSize != nil {
+		if err := b.callbacks.SetLotSize(lot); err != nil {
+			_ = b.sendMessageWithKeyboard(ctx, fmt.Sprintf("⚠️ Gagal mengubah lot: %v", err), b.buildControlKeyboard(b.isPaused))
+			return
+		}
+	}
+	msgText := fmt.Sprintf("🎯 <b>UKURAN LOT BERHASIL DIUBAH!</b>\nSetiap posisi baru sekarang akan menggunakan: <b>%.2f lots</b> flat.", lot)
+	_ = b.sendMessageWithKeyboard(ctx, msgText, b.buildControlKeyboard(b.isPaused))
 }
 
 func (b *TelegramInteractiveBot) sendCurrentStatus(ctx context.Context) {
@@ -469,6 +504,11 @@ func (b *TelegramInteractiveBot) buildControlKeyboard(isPaused bool) map[string]
 				{"text": "🌿 Santai", "callback_data": "cb_mode_santai"},
 				{"text": "⚖️ Balanced", "callback_data": "cb_mode_balanced"},
 				{"text": "⚡ Agresif", "callback_data": "cb_mode_agresif"},
+			},
+			{
+				{"text": "📦 Lot 0.01", "callback_data": "cb_lot_001"},
+				{"text": "📦 Lot 0.05", "callback_data": "cb_lot_005"},
+				{"text": "📦 Lot 0.10", "callback_data": "cb_lot_010"},
 			},
 			{
 				pauseBtn,
