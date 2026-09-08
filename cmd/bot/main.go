@@ -822,6 +822,7 @@ func main() {
 		initialLot = cfg.Risk.MinLotSize
 	}
 	setLiveFloat(&activeUserLot, initialLot)
+	riskMgr.SetFixedLotSize(initialLot)
 
 	currentMarketFocus.Store(FocusGoldOnly)
 	mtfMgr := marketdata.NewMultiTimeframeManager(100)
@@ -919,6 +920,7 @@ func main() {
 					return fmt.Errorf("lot out of range: %.2f (must be 0.01 - 10.0)", lots)
 				}
 				setLiveFloat(&activeUserLot, lots)
+				riskMgr.SetFixedLotSize(lots)
 				log.Printf("[telegram-control] 🎯 USER LOT UPDATED TO: %.2f lots", lots)
 				return nil
 			},
@@ -1310,6 +1312,7 @@ func main() {
 					return fmt.Errorf("invalid lot: %.2f (must be 0.01 - 10.0)", lot)
 				}
 				setLiveFloat(&activeUserLot, lot)
+				riskMgr.SetFixedLotSize(lot)
 				log.Printf("[web-control] 🎯 USER LOT ATOMICALLY UPDATED TO: %.2f lots", lot)
 				return nil
 			},

@@ -61,6 +61,7 @@ func DefaultManagerConfig() ManagerConfig {
 // Thread-safe: all mutable state protected by sync.RWMutex.
 type Manager struct {
 	cfg                  ManagerConfig
+	fixedLots            float64 // Direct user override lot size (if > 0, bypasses caps & auto-sizing)
 	equity               float64 // Current account equity
 	dailyPnL             float64 // Accumulated P&L today
 	openPositions        int     // Current open position count
@@ -217,6 +218,11 @@ func (m *Manager) Evaluate(signal model.Signal, tick model.Tick, atrValue float6
 
 // calculateLotSize determines position size based on risk parameters.
 func (m *Manager) calculateLotSize(symbol string, atrValue float64, pipMult float64) (float64, error) {
+	// 0. Manual User Override Priority: if fixedLots is configured, bypass all ATR and caps!
+	if m.fixedLots > 0 {
+		return math.Round(m.fixedLots*100) / 100, nil
+	}
+
 	if atrValue <= 0 {
 		return 0, ErrInsufficientATR
 	}
@@ -451,6 +457,20 @@ func (m *Manager) RiskInvariant(signal model.Signal) error {
 	return nil
 }
 
+// SetFixedLotSize explicitly overrides all automatic lot sizing and caps.
+// When lot > 0, the bot will strictly trade this exact lot size regardless of account type.
+func (m *Manager) SetFixedLotSize(lot float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.fixedLots = lot
+	if lot > 0 {
+		m.cfg.MinLotSize = lot
+		if lot > m.cfg.MaxLotSize {
+			m.cfg.MaxLotSize = lot
+		}
+	}
+}
+
 // ApplyAccountProfile dynamically adapts risk parameters according to Cent vs Regular account.
 func (m *Manager) ApplyAccountProfile(accType model.AccountType) {
 	m.mu.Lock()
@@ -458,13 +478,17 @@ func (m *Manager) ApplyAccountProfile(accType model.AccountType) {
 
 	if accType == model.AccountTypeCent {
 		m.cfg.MaxSpreadPips = 60.0 // Wider spread tolerance for broker cent markup ($0.60)
-		m.cfg.MaxLotSize = 0.01    // Strict 0.01 lot cap on Cent accounts
+		if m.fixedLots <= 0 {
+			m.cfg.MaxLotSize = 0.01 // Strict 0.01 default if user hasn't overridden
+		}
 		m.cfg.MaxOpenPositions = 1 // Strict 1 position for margin safety
 		m.cfg.MaxPositionsPerSymbol = 1
 	} else {
 		m.cfg.MaxSpreadPips = 35.0 // Tighter spread tolerance for standard/regular accounts ($0.35)
-		if m.cfg.MaxLotSize > 0.05 || m.cfg.MaxLotSize <= 0 {
-			m.cfg.MaxLotSize = 0.05 // Cap to 0.05 max, but never increase if configured smaller (e.g. 0.01)
+		if m.fixedLots <= 0 {
+			if m.cfg.MaxLotSize > 0.05 || m.cfg.MaxLotSize <= 0 {
+				m.cfg.MaxLotSize = 0.05 // Cap to 0.05 max default if user hasn't overridden
+			}
 		}
 		m.cfg.MaxOpenPositions = 2 // Allow up to 2 concurrent swing positions on standard equity
 		m.cfg.MaxPositionsPerSymbol = 1
