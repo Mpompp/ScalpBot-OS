@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=4.9">
+  <link rel="stylesheet" href="css/style.css?v=5.0">
   <!-- TradingView Lightweight Charts Library (Local Offline-Ready Bundle) -->
   <script src="js/lightweight-charts.js"></script>
 </head>
@@ -63,7 +63,10 @@
 
       <!-- DIRECT MANUAL LOT SIZE CONTROLLER -->
       <div class="lot-switcher-bar" title="Direct Lot Sizing (Instant Override)">
-        <span class="mode-label">LOT:</span>
+        <div class="lot-active-badge" id="lotActiveBadge" title="Current Configured Lot Size">
+          <span class="lot-active-dot">●</span>
+          <span class="lot-active-text">ACTIVE: <strong id="lotActiveDisplay">0.01</strong> LOTS</span>
+        </div>
         <div class="lot-input-wrapper">
           <input type="number" id="inputCustomLot" class="input-custom-lot" step="0.01" min="0.01" max="10.0" value="0.01">
           <button id="btnApplyLot" class="btn-lot-set" onclick="window.app.applyCustomLot()">SET</button>
@@ -537,6 +540,6 @@
     </footer>
   </div>
 
-  <script src="js/app.js?v=4.9"></script>
+  <script src="js/app.js?v=5.0"></script>
 </body>
 </html>

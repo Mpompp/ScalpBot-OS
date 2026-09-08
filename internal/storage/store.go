@@ -32,6 +32,7 @@ type DailyState struct {
 	DailyPnL            float64   `json:"daily_pnl"`
 	ProfitTargetReached bool      `json:"profit_target_reached"`
 	CircuitOpen         bool      `json:"circuit_open"`
+	ActiveLotSize       float64   `json:"active_lot_size,omitempty"`
 	LastUpdated         time.Time `json:"last_updated"`
 }
 

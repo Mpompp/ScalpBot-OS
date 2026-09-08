@@ -618,10 +618,16 @@ func main() {
 		log.Printf("[storage] 💾 Loaded %d historical completed trades from disk", len(savedTrades))
 	}
 
-	if ds, err := persistenceStore.LoadDailyState(); err == nil && ds.Date == time.Now().Format("2006-01-02") {
-		riskMgr.RestoreDailyState(ds.DailyPnL, ds.ProfitTargetReached, ds.CircuitOpen)
-		log.Printf("[storage] 💾 Restored daily state for %s: DailyPnL=$%.2f, TargetReached=%v, CircuitOpen=%v",
-			ds.Date, ds.DailyPnL, ds.ProfitTargetReached, ds.CircuitOpen)
+	var savedLotFromState float64
+	if ds, err := persistenceStore.LoadDailyState(); err == nil {
+		if ds.ActiveLotSize >= 0.01 {
+			savedLotFromState = ds.ActiveLotSize
+		}
+		if ds.Date == time.Now().Format("2006-01-02") {
+			riskMgr.RestoreDailyState(ds.DailyPnL, ds.ProfitTargetReached, ds.CircuitOpen)
+			log.Printf("[storage] 💾 Restored daily state for %s: DailyPnL=$%.2f, TargetReached=%v, CircuitOpen=%v",
+				ds.Date, ds.DailyPnL, ds.ProfitTargetReached, ds.CircuitOpen)
+		}
 	}
 
 	// Default trading mode: BALANCED
@@ -829,8 +835,13 @@ func main() {
 
 	var activeUserLot atomic.Uint64
 	initialLot := 0.01
-	if cfg.Risk.MinLotSize > 0 {
+	if savedLotFromState >= 0.01 {
+		initialLot = savedLotFromState
+	} else if cfg.Risk.MinLotSize > 0 {
 		initialLot = cfg.Risk.MinLotSize
+	}
+	if *lotFlag > 0 {
+		initialLot = *lotFlag
 	}
 	setLiveFloat(&activeUserLot, initialLot)
 	riskMgr.SetFixedLotSize(initialLot)
@@ -932,6 +943,16 @@ func main() {
 				}
 				setLiveFloat(&activeUserLot, lots)
 				riskMgr.SetFixedLotSize(lots)
+				if persistenceStore != nil && riskMgr != nil {
+					_ = persistenceStore.SaveDailyState(storage.DailyState{
+						Date:                time.Now().Format("2006-01-02"),
+						DailyPnL:            riskMgr.DailyPnL(),
+						ProfitTargetReached: riskMgr.IsProfitTargetReached(),
+						CircuitOpen:         riskMgr.IsCircuitOpen(),
+						ActiveLotSize:       lots,
+						LastUpdated:         time.Now(),
+					})
+				}
 				log.Printf("[telegram-control] 🎯 USER LOT UPDATED TO: %.2f lots", lots)
 				return nil
 			},
@@ -1338,6 +1359,16 @@ func main() {
 				}
 				setLiveFloat(&activeUserLot, lot)
 				riskMgr.SetFixedLotSize(lot)
+				if persistenceStore != nil && riskMgr != nil {
+					_ = persistenceStore.SaveDailyState(storage.DailyState{
+						Date:                time.Now().Format("2006-01-02"),
+						DailyPnL:            riskMgr.DailyPnL(),
+						ProfitTargetReached: riskMgr.IsProfitTargetReached(),
+						CircuitOpen:         riskMgr.IsCircuitOpen(),
+						ActiveLotSize:       lot,
+						LastUpdated:         time.Now(),
+					})
+				}
 				log.Printf("[web-control] 🎯 USER LOT ATOMICALLY UPDATED TO: %.2f lots", lot)
 				return nil
 			},

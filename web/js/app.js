@@ -33,6 +33,15 @@ class DashboardApp {
     this.initEquityChart();
     this.initTradingViewChart();
     this.initEventListeners();
+
+    // Instant local cache restore for configured lot size
+    try {
+      const savedLot = localStorage.getItem('scalpbot_active_lot');
+      if (savedLot) {
+        this.updateLotUI(parseFloat(savedLot));
+      }
+    } catch (e) {}
+
     this.connectWebSocket();
 
     // Smooth 1-second countdown ticker for News and Timers
@@ -2191,9 +2200,14 @@ class DashboardApp {
   }
 
   updateLotUI(lot) {
+    if (!lot || isNaN(lot) || lot <= 0) return;
     const input = document.getElementById('inputCustomLot');
     if (input && document.activeElement !== input) {
       input.value = lot.toFixed(2);
+    }
+    const display = document.getElementById('lotActiveDisplay');
+    if (display) {
+      display.textContent = lot.toFixed(2);
     }
     const p1 = document.getElementById('pillLot001');
     const p5 = document.getElementById('pillLot005');
@@ -2201,6 +2215,10 @@ class DashboardApp {
     if (p1) p1.classList.toggle('active', Math.abs(lot - 0.01) < 0.001);
     if (p5) p5.classList.toggle('active', Math.abs(lot - 0.05) < 0.001);
     if (p10) p10.classList.toggle('active', Math.abs(lot - 0.10) < 0.001);
+
+    try {
+      localStorage.setItem('scalpbot_active_lot', lot.toFixed(2));
+    } catch (e) {}
   }
 
   async closePosition(orderID) {
