@@ -87,13 +87,14 @@ type SymbolPipeline struct {
 	LastSignal    string
 	SignalStatus  string
 	SignalReason  string
-	SignalTime    string
-	High24h       float64
-	Low24h        float64
-	OpenPrice     float64
-	LastTickTime  time.Time
-	Snapshots     []PriceSnapshot
-	RecentCandles []web.CandleTelemetry
+	SignalTime          string
+	High24h             float64
+	Low24h              float64
+	OpenPrice           float64
+	LastTickTime        time.Time
+	LastCompletedCandle model.Candle
+	Snapshots           []PriceSnapshot
+	RecentCandles       []web.CandleTelemetry
 }
 
 func (p *SymbolPipeline) SetSignalStatus(signal, status, reason, timeStr string) {
@@ -1447,8 +1448,15 @@ func main() {
 							if atrVal <= 0 {
 								atrVal = cfg.Strategy.ATRMinimum
 							}
+							p.mu.RLock()
+							evalCandle := p.LastCompletedCandle
+							p.mu.RUnlock()
+							liveTPS := 5.0
+							if velocityFilter != nil {
+								liveTPS = velocityFilter.CurrentTPS(t.TimestampNs)
+							}
 							regime, conf := p.AIFilter.EvaluateCurrent(
-								t, p.Strategy.FastEMA(), p.Strategy.SlowEMA(), p.Strategy.RSI(), atrVal, 10.0, model.Candle{},
+								t, p.Strategy.FastEMA(), p.Strategy.SlowEMA(), p.Strategy.RSI(), atrVal, liveTPS, evalCandle,
 							)
 
 							// Calculate price changes over 5m, 15m, 1h, 4h, 24h
@@ -1713,7 +1721,21 @@ func main() {
 							Volume:      float64(cd.Volume),
 							TimestampNs: cd.Time * 1e9,
 						}
+						// Approximate directional volume for HMM warm-up
+						if cd.Close >= cd.Open {
+							cModel.BuyerVol = float64(cd.Volume) * 0.60
+							cModel.SellerVol = float64(cd.Volume) * 0.40
+						} else {
+							cModel.BuyerVol = float64(cd.Volume) * 0.40
+							cModel.SellerVol = float64(cd.Volume) * 0.60
+						}
 						p.Strategy.OnCandle(cModel)
+						p.LastCompletedCandle = cModel
+
+						// Warm up AI Gaussian HMM over historical M5 bars
+						if p.AIFilter != nil {
+							_, _ = p.AIFilter.UpdateHMM(cModel, p.Strategy.ATR())
+						}
 
 						// Warm up Macro Confluence indicators & Trend
 						fastM5 := p.M5FastEMA.Update(cd.Close)
@@ -1848,6 +1870,13 @@ func main() {
 				if m5Closed {
 					fastM5 := p.M5FastEMA.Update(m5Candle.Close)
 					slowM5 := p.M5SlowEMA.Update(m5Candle.Close)
+					atrM5 := p.Strategy.ATR()
+					if atrM5 <= 0 {
+						atrM5 = m5Candle.Range()
+						if atrM5 <= 0 {
+							atrM5 = cfg.Strategy.ATRMinimum
+						}
+					}
 					p.mu.Lock()
 					if !math.IsNaN(fastM5) && !math.IsNaN(slowM5) {
 						if fastM5 > slowM5*1.0001 {
@@ -1859,6 +1888,13 @@ func main() {
 						}
 					}
 					p.mu.Unlock()
+
+					// Feed completed M5 candle into Gaussian HMM Engine
+					if p.AIFilter != nil {
+						hmmState, hmmConf := p.AIFilter.UpdateHMM(m5Candle, atrM5)
+						log.Printf("[ai-hmm] 🧬 %s M5 HMM State: %s (conf=%.1f%%, ATR=%.5f, BuyVol=%.0f, SellVol=%.0f)",
+							symKey, hmmState.String(), hmmConf*100.0, atrM5, m5Candle.BuyerVol, m5Candle.SellerVol)
+					}
 				}
 
 				if m15Closed {
@@ -1884,11 +1920,6 @@ func main() {
 						}
 					}
 					p.mu.Unlock()
-
-					// Feed completed M15 candle into Gaussian HMM Engine
-					hmmState, hmmConf := p.AIFilter.UpdateHMM(m15Candle, atrM15)
-					log.Printf("[ai-hmm] 🧬 %s M15 HMM State: %s (conf=%.1f%%, ATR=%.5f, BuyVol=%.0f, SellVol=%.0f)",
-						symKey, hmmState.String(), hmmConf*100.0, atrM15, m15Candle.BuyerVol, m15Candle.SellerVol)
 				}
 
 				if h1Closed {
@@ -2008,6 +2039,9 @@ func main() {
 				// Candle strategies (Dual-Mode: Trend Hunter + Range Scalper)
 				if candle, closed := p.Aggregator.OnTick(tick); closed {
 					candleClosedThisTick = true
+					p.mu.Lock()
+					p.LastCompletedCandle = candle
+					p.mu.Unlock()
 					// Store rolling candles for TradingView Lightweight Charts
 					p.AddRecentCandle(web.CandleTelemetry{
 						Time:   candle.TimestampNs / 1e9,
@@ -2272,14 +2306,24 @@ func main() {
 
 				// 1. AI Machine Learning & Market Regime Guard
 				if aiFilterEnabled.Load() {
-					var currCandle model.Candle
-					if c, ok := p.Aggregator.Current(); ok {
-						currCandle = c
+					p.mu.RLock()
+					currCandle := p.LastCompletedCandle
+					p.mu.RUnlock()
+					if currCandle.Close == 0 {
+						if c, ok := p.Aggregator.Current(); ok {
+							currCandle = c
+						}
 					}
+
+					currTPS := 5.0
+					if velocityFilter != nil {
+						currTPS = velocityFilter.CurrentTPS(lastTick.TimestampNs)
+					}
+
 					var aiAllowed bool
 					var aiReason string
 					aiAllowed, aiConf, regime, aiReason = p.AIFilter.EvaluateSignal(
-						sig, lastTick, p.Strategy.FastEMA(), p.Strategy.SlowEMA(), p.Strategy.RSI(), atrVal, 5.0, currCandle,
+						sig, lastTick, p.Strategy.FastEMA(), p.Strategy.SlowEMA(), p.Strategy.RSI(), atrVal, currTPS, currCandle,
 					)
 					isRangeSig := strings.Contains(strings.ToLower(sig.StrategyID), "range")
 

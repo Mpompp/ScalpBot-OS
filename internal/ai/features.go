@@ -147,11 +147,18 @@ func (fe *FeatureExtractor) Extract(
 		varShort /= float64(nShort)
 		varLong /= float64(nLong)
 
-		if varLong > 1e-12 {
-			fv[FeatVolRatio] = math.Sqrt(varShort / varLong)
-		} else {
-			fv[FeatVolRatio] = 1.0
+		// Minimum variance floor based on 0.02 ATR to avoid division by micro-tick noise
+		epsVar := 1e-6
+		if atr > 0 {
+			epsVar = (0.02 * atr) * (0.02 * atr)
 		}
+		ratio := math.Sqrt((varShort + epsVar) / (varLong + epsVar))
+		if ratio > 4.0 {
+			ratio = 4.0
+		} else if ratio < 0.25 {
+			ratio = 0.25
+		}
+		fv[FeatVolRatio] = ratio
 	} else {
 		fv[FeatVolRatio] = 1.0
 	}

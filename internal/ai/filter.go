@@ -91,6 +91,20 @@ func (f *SignalFilter) LastHMMState() (hmm.MarketState, float64) {
 func (f *SignalFilter) EvaluateCurrent(tick model.Tick, fastEMA, slowEMA, rsi, atr, tps float64, candle model.Candle) (MarketRegime, float64) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
+
+	// 1. If HMM has confirmed Bull or Bear expansion, HMM rules
+	if f.lastHMMState == hmm.StateBull {
+		return RegimeTrendingBullish, f.lastHMMConfidence
+	} else if f.lastHMMState == hmm.StateBear {
+		return RegimeTrendingBearish, f.lastHMMConfidence
+	}
+
+	// 2. In neutral/idle state, use the 12-feature RegimeClassifier for real-time tick-by-tick telemetry
+	if f.regime != nil && f.extractor != nil && tick.MidPrice() > 0 {
+		fv := f.extractor.Extract(tick, fastEMA, slowEMA, rsi, atr, tps, candle)
+		return f.regime.Classify(fv)
+	}
+
 	return f.lastRegime, f.lastConfidence
 }
 
@@ -116,6 +130,8 @@ func (f *SignalFilter) UpdateHMM(candle model.Candle, atr float64) (hmm.MarketSt
 	logReturn := 0.0
 	if f.prevCandleClose > 0 && candle.Close > 0 {
 		logReturn = math.Log(candle.Close / f.prevCandleClose)
+	} else if candle.Open > 0 && candle.Close > 0 {
+		logReturn = math.Log(candle.Close / candle.Open)
 	}
 	f.prevCandleClose = candle.Close
 

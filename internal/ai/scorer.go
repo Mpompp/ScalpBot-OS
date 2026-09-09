@@ -64,6 +64,9 @@ func (ss *SignalScorer) PredictConfidence(sigType model.SignalType, fv FeatureVe
 		if bodyRatio > 0.50 && upperWick < 0.25 {
 			rawScore += 0.35 // Bullish buying dominance
 		}
+		if lowerWick >= 0.20 {
+			rawScore += 0.30 // Lower rejection wick confirms support bounce
+		}
 		if upperWick > 0.40 {
 			rawScore -= 0.45 // Upper rejection wall
 		}
@@ -108,6 +111,9 @@ func (ss *SignalScorer) PredictConfidence(sigType model.SignalType, fv FeatureVe
 		// --- Tree 3: Candlestick Microstructure (SELL) ---
 		if bodyRatio > 0.50 && lowerWick < 0.25 {
 			rawScore += 0.35 // Bearish selling dominance
+		}
+		if upperWick >= 0.20 {
+			rawScore += 0.30 // Upper rejection wick confirms resistance rejection
 		}
 		if lowerWick > 0.40 {
 			rawScore -= 0.45 // Lower support floor wall
