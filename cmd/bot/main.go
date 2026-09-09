@@ -652,6 +652,8 @@ func main() {
 			riskMgr.AddFilter(sessionFilter)
 			log.Printf("[main] trading session filter enabled for: %v", cfg.Session.Sessions)
 		}
+	} else {
+		log.Println("[main] 🌍 24-HOUR NON-STOP TRADING ACTIVE: session filter disabled")
 	}
 
 	// Live Economic Calendar & News Blackout Filter

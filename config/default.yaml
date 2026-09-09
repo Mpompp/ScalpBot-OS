@@ -88,15 +88,15 @@ position:
   time_stop_duration: 45m     # Stagnant Trade Killer: auto-close if flat > 45 minutes (M5)
 
 # -----------------------------------------------------------------------------
-# Trading Session Filter — London + NY Overlap Only (Best for Gold M5/M15)
+# Trading Session Filter — 24-Hour Non-Stop Trading
 # -----------------------------------------------------------------------------
 session:
-  enabled: true            # Enable session-based trading restrictions
-  sessions:                # Active sessions (only trade during these windows)
+  enabled: false           # Disabled: 24-hour trading enabled across all market sessions
+  sessions:
     - "london"             # 07:00-16:00 UTC (09:00-18:00 WIB)
     - "newyork"            # 12:00-21:00 UTC (14:00-23:00 WIB)
-    - "overlap"            # 12:00-16:00 UTC (14:00-18:00 WIB) — Peak liquidity, lowest spread
-    # - "asian"            # 23:00-08:00 UTC (01:00-10:00 WIB) — Disable for Gold due to chop
+    - "overlap"            # 12:00-16:00 UTC (14:00-18:00 WIB)
+    - "asian"              # 23:00-08:00 UTC (01:00-10:00 WIB)
 
 # -----------------------------------------------------------------------------
 # Order Executor
