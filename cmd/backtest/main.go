@@ -59,6 +59,17 @@ func main() {
 				PullbackDiscountATR: cfg.Strategy.PullbackDiscountATR,
 				Symbol:              cfg.Bot.Symbol,
 			}
+			engineCfg.RangeConfig = strategy.RangeScalperConfig{
+				BollingerPeriod: cfg.RangeStrategy.BollingerPeriod,
+				BollingerStdDev: cfg.RangeStrategy.BollingerStdDev,
+				RSIPeriod:       cfg.RangeStrategy.RSIPeriod,
+				ATRPeriod:       cfg.RangeStrategy.ATRPeriod,
+				RSIOverbought:   cfg.RangeStrategy.RSIOverbought,
+				RSIOversold:     cfg.RangeStrategy.RSIOversold,
+				MinTPPoints:     cfg.RangeStrategy.MinTPPoints,
+				Symbol:          cfg.Bot.Symbol,
+			}
+			engineCfg.EnableDualMode = cfg.RangeStrategy.Enabled
 			engineCfg.RiskConfig = risk.ManagerConfig{
 				InitialEquity:         cfg.Risk.InitialEquity,
 				RiskPerTrade:          cfg.Risk.RiskPerTrade,
@@ -110,9 +121,11 @@ func main() {
 				AutoRemoveOnClose:  true,
 			}
 			engineCfg.AIConfig = ai.FilterConfig{
-				EnableMLFilter:    cfg.AI.EnableMLFilter,
-				MinConfidence:     cfg.AI.MinConfidence,
-				FilterRangingChop: cfg.AI.FilterRangingChop,
+				EnableMLFilter:     cfg.AI.EnableMLFilter,
+				MinConfidence:      cfg.AI.MinConfidence,
+				RangeMinConfidence: cfg.AI.RangeMinConfidence,
+				FilterRangingChop:  cfg.AI.FilterRangingChop,
+				DualModeEnabled:    cfg.RangeStrategy.Enabled,
 			}
 			log.Printf("[backtest] loaded strategy & AI config from %s", *configFile)
 		} else {

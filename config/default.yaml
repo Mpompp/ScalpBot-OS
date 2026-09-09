@@ -78,25 +78,24 @@ position:
   breakeven_pips: 500.0       # Move SL to entry after +$5.00 profit (500 pips)
   breakeven_buff_pips: 20.0   # Buffer above entry price for break-even SL (+$0.20 Gold)
   enable_profit_locker: true  # Multi-Stage Dynamic Profit Locker (Stage 1: BE, Stage 2: 50% Lock, Stage 3: 75% Lock)
-  stage1_atr_mult: 1.5        # Stage 1 trigger threshold (1.5x ATR, min $5.00)
-  stage2_atr_mult: 2.0        # Stage 2 trigger threshold (2.0x ATR, min $7.50)
-  stage3_atr_mult: 2.8        # Stage 3 trigger threshold (2.8x ATR, min $10.50)
+  stage1_atr_mult: 1.0        # Stage 1 trigger threshold (1.0x ATR, min $3.00 floor)
+  stage2_atr_mult: 1.8        # Stage 2 trigger threshold (1.8x ATR, min $6.00 floor)
+  stage3_atr_mult: 2.5        # Stage 3 trigger threshold (2.5x ATR, min $8.50 floor)
   enable_partial_tp: true     # Enable closing 50% lot at TP1 and letting remainder run
   partial_tp_ratio: 0.5       # Lot fraction to close at TP1 (0.5 = 50%)
-  tp1_pips: 500.0             # Target pips for Partial TP1 ($5.00 = 500 pips)
-  tp2_pips: 1000.0            # Final target pips for TP2 ($10.00 = 1000 pips)
+  tp1_pips: 400.0             # Target pips for Partial TP1 ($4.00 = 400 pips)
+  tp2_pips: 800.0             # Final target pips for TP2 ($8.00 = 800 pips)
   time_stop_duration: 45m     # Stagnant Trade Killer: auto-close if flat > 45 minutes (M5)
 
 # -----------------------------------------------------------------------------
-# Trading Session Filter — 24-Hour Non-Stop Trading
+# Trading Session Filter — London & New York Prime Liquidity Sessions
 # -----------------------------------------------------------------------------
 session:
-  enabled: false           # Disabled: 24-hour trading enabled across all market sessions
+  enabled: true            # Enabled: Filter low-liquidity Asian / Rollover chop
   sessions:
-    - "london"             # 07:00-16:00 UTC (09:00-18:00 WIB)
-    - "newyork"            # 12:00-21:00 UTC (14:00-23:00 WIB)
-    - "overlap"            # 12:00-16:00 UTC (14:00-18:00 WIB)
-    - "asian"              # 23:00-08:00 UTC (01:00-10:00 WIB)
+    - "london"             # 07:00-16:00 UTC (14:00-23:00 WIB)
+    - "newyork"            # 12:00-21:00 UTC (19:00-04:00 WIB)
+    - "overlap"            # 12:00-16:00 UTC (19:00-23:00 WIB)
 
 # -----------------------------------------------------------------------------
 # Order Executor
@@ -126,8 +125,8 @@ broker:
 notifier:
   enable_log: true         # Log alerts to stdout (always recommended)
   webhook_url: ""          # HTTP webhook URL (empty = disabled)
-  telegram_token: ""       # Telegram bot token (prefer env: SCALP_TG_TOKEN)
-  telegram_chat: ""        # Telegram chat ID (prefer env: SCALP_TG_CHAT)
+  telegram_token: ""
+  telegram_chat: ""
   enable_interactive_bot: true      # Enable 2-way Telegram polling & remote control (Inline Buttons)
 
 # -----------------------------------------------------------------------------
@@ -135,9 +134,9 @@ notifier:
 # -----------------------------------------------------------------------------
 ai:
   enable_ml_filter: true        # Enable AI Gaussian HMM regime scoring
-  dual_mode_enabled: false      # DISABLED for Gold M5/M15: Pure Trend mode (Range scalper causes whipsaws)
-  min_confidence: 0.55          # Calibrated 55% composite ensemble threshold (Balanced mode default)
-  range_min_confidence: 0.50    # 50% minimum confidence for Range setups (unused when dual_mode=false)
+  dual_mode_enabled: true       # ENABLED: Adaptive Regime Switching (Momentum + Mean-Reversion)
+  min_confidence: 0.75          # Calibrated 75% composite ensemble threshold (Institutional Quality Filter)
+  range_min_confidence: 0.65    # 65% minimum confidence for Range setups in StateNoise
   filter_ranging_chop: true     # Block trend breakout trades during Noise/Chop state
 
 # -----------------------------------------------------------------------------

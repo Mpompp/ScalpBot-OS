@@ -30,6 +30,7 @@ import (
 
 	"github.com/pompbot/scalpbot/config"
 	"github.com/pompbot/scalpbot/internal/ai"
+	"github.com/pompbot/scalpbot/internal/ai/hmm"
 	"github.com/pompbot/scalpbot/internal/broker"
 	"github.com/pompbot/scalpbot/internal/broker/mt5"
 	"github.com/pompbot/scalpbot/internal/executor"
@@ -2112,15 +2113,18 @@ func main() {
 
 					// 2. Evaluate Mean-Reversion Scalper (Range Mode)
 					if p.RangeStrategy != nil && cfg.RangeStrategy.Enabled {
-						sigRange := p.RangeStrategy.OnCandle(candle)
-						if sigRange.IsActionable() {
-							upper, mid, lower, rsiVal, _, _ := p.RangeStrategy.GetIndicators()
-							log.Printf("[strategy] 🔄 RANGE SIGNAL: %s %s @ %.5f (Upper=%.5f Mid=%.5f Lower=%.5f RSI=%.1f)",
-								sigRange.Type, sigRange.Symbol, candle.Close, upper, mid, lower, rsiVal)
-							select {
-							case signalCh <- sigRange:
-							default:
-								log.Println("[pipeline] signal channel full, dropping range signal")
+						// Adaptive Regime Guard: Range Scalper is STRICTLY gated to hmm.StateNoise (Consolidation/Ranging)
+						if hmmState, _ := p.AIFilter.LastHMMState(); hmmState == hmm.StateNoise {
+							sigRange := p.RangeStrategy.OnCandle(candle)
+							if sigRange.IsActionable() {
+								upper, mid, lower, rsiVal, _, _ := p.RangeStrategy.GetIndicators()
+								log.Printf("[strategy] 🔄 RANGE SIGNAL: %s %s @ %.5f (Upper=%.5f Mid=%.5f Lower=%.5f RSI=%.1f)",
+									sigRange.Type, sigRange.Symbol, candle.Close, upper, mid, lower, rsiVal)
+								select {
+								case signalCh <- sigRange:
+								default:
+									log.Println("[pipeline] signal channel full, dropping range signal")
+								}
 							}
 						}
 					}
@@ -2628,17 +2632,17 @@ func main() {
 						order.StopLoss = execPrice + structSLDist
 					}
 
-					// Guarantee Reward-to-Risk ratio >= 2.2x
+					// Guarantee Reward-to-Risk ratio >= 1.5x (Calibrated M5 Scalp Target)
 					structTPDist := math.Abs(sig.TakeProfit - execPrice)
-					minTPDist := structSLDist * 2.2
-					if prof.IsGold && minTPDist < 8.00 {
-						minTPDist = 8.00
+					minTPDist := structSLDist * 1.5
+					if prof.IsGold && minTPDist < 5.00 {
+						minTPDist = 5.00
 					}
 					if structTPDist < minTPDist {
 						structTPDist = minTPDist
 					}
-					if prof.IsGold && structTPDist > 25.00 {
-						structTPDist = 25.00
+					if prof.IsGold && structTPDist > 12.00 {
+						structTPDist = 12.00
 					}
 
 					if sig.Type == model.Buy {

@@ -107,6 +107,13 @@ func (m *Manager) Evaluate(signal model.Signal, tick model.Tick, atrValue float6
 		}
 	}
 
+	// Reset daily tracking at start of new trading day (based on tick time)
+	var tickTime time.Time
+	if tick.TimestampNs > 0 {
+		tickTime = time.Unix(0, tick.TimestampNs).UTC()
+	}
+	m.checkDailyResetAt(tickTime)
+
 	// Guard 1: Signal must be actionable
 	if !signal.IsActionable() {
 		return empty, ErrInvalidSignal
@@ -359,12 +366,21 @@ func (m *Manager) RecordCloseForSymbol(symbol string, pnl float64) {
 // checkDailyReset resets daily PnL tracking at the start of a new trading day (UTC timezone).
 // Must be called with mu held.
 func (m *Manager) checkDailyReset() {
-	today := time.Now().UTC().YearDay()
-	if today != m.lastResetDay {
+	m.checkDailyResetAt(time.Now().UTC())
+}
+
+// checkDailyResetAt resets daily PnL tracking using an explicit timestamp (critical for backtesting parity).
+// Must be called with mu held.
+func (m *Manager) checkDailyResetAt(t time.Time) {
+	if t.IsZero() {
+		t = time.Now().UTC()
+	}
+	day := t.YearDay()
+	if day != m.lastResetDay {
 		m.dailyPnL = 0
 		m.circuitOpen = false
 		m.profitTargetReached = false
-		m.lastResetDay = today
+		m.lastResetDay = day
 	}
 }
 

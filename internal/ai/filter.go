@@ -2,6 +2,7 @@ package ai
 
 import (
 	"math"
+	"strings"
 	"sync"
 
 	"github.com/pompbot/scalpbot/internal/ai/hmm"
@@ -185,7 +186,8 @@ func (f *SignalFilter) EvaluateSignal(
 	defer f.mu.Unlock()
 
 	// 0. Safety Guard: Range signals disabled when DualMode is off
-	if !f.cfg.DualModeEnabled && sig.StrategyID == "range_scalper" {
+	isRangeStrategy := strings.HasPrefix(sig.StrategyID, "range")
+	if !f.cfg.DualModeEnabled && isRangeStrategy {
 		return false, 0.0, f.lastRegime, "AI Filter 🛑 REJECT: Range signals disabled in Trend Momentum Mode"
 	}
 
@@ -202,34 +204,59 @@ func (f *SignalFilter) EvaluateSignal(
 
 	// 2. Component A: Gaussian HMM Market Regime & Expansion Weather (Weight: 50%)
 	var hmmScore float64 = 0.50
-	switch state {
-	case hmm.StateBull:
-		if sig.Type == model.Buy {
-			hmmScore = 0.50 + 0.50*hmmConf
-		} else {
-			hmmScore = 0.50 - 0.50*hmmConf
+	if isRangeStrategy {
+		switch state {
+		case hmm.StateNoise:
+			// In neutral / ranging chop, this is the IDEAL regime for mean-reversion!
+			hmmScore = 0.50 + 0.35*hmmConf
+		case hmm.StateBull:
+			if sig.Type == model.Buy {
+				hmmScore = 0.40 // buying near top in bull trend
+			} else {
+				hmmScore = 0.20 // shorting against strong bull trend
+			}
+		case hmm.StateBear:
+			if sig.Type == model.Sell {
+				hmmScore = 0.40 // selling near bottom in bear trend
+			} else {
+				hmmScore = 0.20 // buying against strong bear trend
+			}
 		}
-	case hmm.StateBear:
-		if sig.Type == model.Sell {
-			hmmScore = 0.50 + 0.50*hmmConf
-		} else {
-			hmmScore = 0.50 - 0.50*hmmConf
-		}
-	default: // hmm.StateNoise / Ranging Chop
-		if f.cfg.FilterRangingChop {
-			// In neutral weather, penalize HMM score to 0.40.
-			// High-conviction GBDT triggers (score >= 0.70) can still achieve composite >= 0.55 and pass,
-			// while weak/choppy triggers are filtered naturally by the composite decision gate.
-			hmmScore = 0.40
-		} else {
-			hmmScore = 0.50
+	} else {
+		// Momentum / Trend Scalper
+		switch state {
+		case hmm.StateBull:
+			if sig.Type == model.Buy {
+				hmmScore = 0.50 + 0.50*hmmConf
+			} else {
+				hmmScore = 0.50 - 0.50*hmmConf
+			}
+		case hmm.StateBear:
+			if sig.Type == model.Sell {
+				hmmScore = 0.50 + 0.50*hmmConf
+			} else {
+				hmmScore = 0.50 - 0.50*hmmConf
+			}
+		default: // hmm.StateNoise / Ranging Chop
+			if f.cfg.FilterRangingChop {
+				// In neutral weather, penalize HMM score to 0.40.
+				// High-conviction GBDT triggers (score >= 0.70) can still achieve composite >= 0.55 and pass,
+				// while weak/choppy triggers are filtered naturally by the composite decision gate.
+				hmmScore = 0.40
+			} else {
+				hmmScore = 0.50
+			}
 		}
 	}
 
 	// 3. Component B: GBDT Microstructure & Candlestick Scorer (Weight: 50%)
 	var gbdtScore float64 = 0.50
 	if f.scorer != nil {
-		gbdtScore = f.scorer.PredictConfidence(sig.Type, fv)
+		if isRangeStrategy {
+			gbdtScore = f.scorer.PredictRangeConfidence(sig.Type, fv)
+		} else {
+			gbdtScore = f.scorer.PredictConfidence(sig.Type, fv)
+		}
 	}
 
 	// 4. Calculate Unified Composite Confidence: 50% HMM Market Weather + 50% GBDT Trigger Quality
@@ -237,7 +264,11 @@ func (f *SignalFilter) EvaluateSignal(
 	f.lastConfidence = compositeConf
 
 	// 5. Single Master Decision Gate
-	if compositeConf < f.cfg.MinConfidence {
+	minConf := f.cfg.MinConfidence
+	if isRangeStrategy && f.cfg.RangeMinConfidence > 0 {
+		minConf = f.cfg.RangeMinConfidence
+	}
+	if compositeConf < minConf {
 		return false, compositeConf, regime, "AI Filter REJECT: composite confidence below threshold"
 	}
 

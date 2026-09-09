@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pompbot/scalpbot/internal/ai"
+	"github.com/pompbot/scalpbot/internal/ai/hmm"
 	"github.com/pompbot/scalpbot/internal/executor"
 	"github.com/pompbot/scalpbot/internal/indicator"
 	"github.com/pompbot/scalpbot/internal/marketdata"
@@ -24,6 +25,8 @@ type EngineConfig struct {
 	CommissionPerLot float64 // Commission per round-turn lot (e.g. $3.50)
 
 	StrategyConfig strategy.MomentumScalperConfig
+	RangeConfig    strategy.RangeScalperConfig
+	EnableDualMode bool
 	RiskConfig     risk.ManagerConfig
 	TrackerConfig  executor.TrackerConfig
 	AIConfig       ai.FilterConfig
@@ -112,6 +115,10 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 
 	// 1. Initialize Pipeline Components
 	strat := strategy.NewMomentumScalper("scalper", e.cfg.StrategyConfig)
+	var rangeStrat *strategy.RangeScalper
+	if e.cfg.EnableDualMode {
+		rangeStrat = strategy.NewRangeScalper("range_scalper", e.cfg.RangeConfig)
+	}
 	riskMgr := risk.NewManager(e.cfg.RiskConfig)
 	if e.cfg.SessionFilter != nil {
 		riskMgr.AddFilter(e.cfg.SessionFilter)
@@ -264,6 +271,15 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 			if cSig.IsActionable() {
 				signalsGenerated++
 				sig = cSig
+			} else if e.cfg.EnableDualMode && rangeStrat != nil {
+				// Adaptive Regime Guard: Range Scalper is STRICTLY gated to hmm.StateNoise (Consolidation/Ranging)
+				if lastHMM, _ := aiFilter.LastHMMState(); lastHMM == hmm.StateNoise {
+					rSig := rangeStrat.OnCandle(candle)
+					if rSig.IsActionable() {
+						signalsGenerated++
+						sig = rSig
+					}
+				}
 			}
 		}
 
@@ -344,15 +360,15 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 					}
 
 					structTPDist := math.Abs(sig.TakeProfit - execPrice)
-					minTPDist := structSLDist * 2.2
-					if isGold && minTPDist < 8.00 {
-						minTPDist = 8.00
+					minTPDist := structSLDist * 1.5
+					if isGold && minTPDist < 5.00 {
+						minTPDist = 5.00
 					}
 					if structTPDist < minTPDist {
 						structTPDist = minTPDist
 					}
-					if isGold && structTPDist > 25.00 {
-						structTPDist = 25.00
+					if isGold && structTPDist > 12.00 {
+						structTPDist = 12.00
 					}
 
 					if order.Side == model.SideBuy {
