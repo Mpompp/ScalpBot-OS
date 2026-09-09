@@ -2531,6 +2531,9 @@ func main() {
 				// 3.2 Small-Capital Margin Safety Buffer
 				currFreeMargin := getLiveFloat(&liveFreeMargin, getLiveFloat(&liveBalance, cfg.Risk.InitialEquity))
 				estimatedMarginReq := order.Lots * 1000.0 // ~$10 margin per 0.01 lot on standard 1:100 leverage
+				if strings.HasSuffix(strings.ToLower(sig.Symbol), "c") {
+					estimatedMarginReq = order.Lots * 10.0 // 100x smaller contract on Cent accounts
+				}
 				if currFreeMargin > 0 && currFreeMargin < estimatedMarginReq*1.5 {
 					log.Printf("[risk] order rejected on %s: insufficient free margin for safe scalping (free=$%.2f, req=$%.2f)",
 						sig.Symbol, currFreeMargin, estimatedMarginReq)
