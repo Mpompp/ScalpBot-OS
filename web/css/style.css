@@ -1340,13 +1340,14 @@ input:checked + .slider:before {
 }
 
 .signal-audit-list {
-  max-height: 210px;
+  max-height: 260px;
   overflow-y: auto;
   overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: 6px;
   padding-right: 4px;
+  padding-bottom: 6px;
 }
 
 .signal-audit-list::-webkit-scrollbar {

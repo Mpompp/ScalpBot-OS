@@ -1770,6 +1770,50 @@ func main() {
 					saveCandlesCache(sym, cachedCopy)
 					saveCandlesCache(clean, cachedCopy)
 					log.Printf("[backfill] ✅ Warm-up complete for %s (FastEMA=%.2f, SlowEMA=%.2f)", sym, p.Strategy.FastEMA(), p.Strategy.SlowEMA())
+
+					// Fetch official M15 bars from MT5 for authentic intermediate trend calculation
+					m15DTO, errM15 := mt5Adapter.FetchCandles(ctx, sym, "M15", 60)
+					if errM15 == nil && len(m15DTO) > 0 {
+						p.mu.Lock()
+						for _, cd15 := range m15DTO {
+							f15 := p.M15FastEMA.Update(cd15.Close)
+							s15 := p.M15SlowEMA.Update(cd15.Close)
+							_ = p.M15RSI.Update(cd15.Close)
+							_ = p.M15ATR.Update(model.Candle{High: cd15.High, Low: cd15.Low, Close: cd15.Close})
+							if !math.IsNaN(f15) && !math.IsNaN(s15) {
+								if f15 > s15*1.0001 {
+									p.M15Trend = "BULLISH"
+								} else if f15 < s15*0.9999 {
+									p.M15Trend = "BEARISH"
+								} else {
+									p.M15Trend = "NEUTRAL"
+								}
+							}
+						}
+						p.mu.Unlock()
+						log.Printf("[backfill] ✅ M15 Macro warm-up complete for %s (Trend=%s)", sym, p.M15Trend)
+					}
+
+					// Fetch official H1 bars from MT5 for authentic macro trend calculation
+					h1DTO, errH1 := mt5Adapter.FetchCandles(ctx, sym, "H1", 60)
+					if errH1 == nil && len(h1DTO) > 0 {
+						p.mu.Lock()
+						for _, cdh1 := range h1DTO {
+							fh1 := p.H1FastEMA.Update(cdh1.Close)
+							sh1 := p.H1SlowEMA.Update(cdh1.Close)
+							if !math.IsNaN(fh1) && !math.IsNaN(sh1) {
+								if fh1 > sh1*1.0001 {
+									p.H1Trend = "BULLISH"
+								} else if fh1 < sh1*0.9999 {
+									p.H1Trend = "BEARISH"
+								} else {
+									p.H1Trend = "NEUTRAL"
+								}
+							}
+						}
+						p.mu.Unlock()
+						log.Printf("[backfill] ✅ H1 Macro warm-up complete for %s (Trend=%s)", sym, p.H1Trend)
+					}
 				}
 			}
 		}()
@@ -2169,24 +2213,23 @@ func main() {
 					}
 				}
 
-				// 0.15 Gate 1: Hard Macro Trend Lock (M5 / M15 / H1 Hierarchical Confluence)
-				// STRICT RULE: No BUY during Bearish Trend, No SELL during Bullish Trend
+				// 0.15 Gate 1: Hard Macro Trend Lock (M15 / H1 Hierarchical Confluence)
+				// STRICT RULE: No BUY during Bearish Macro Trend, No SELL during Bullish Macro Trend
 				p.mu.RLock()
-				m5Trend := p.M5Trend
 				m15Trend := p.M15Trend
 				h1Trend := p.H1Trend
 				p.mu.RUnlock()
 
-				effectiveTrend := h1Trend
-				if effectiveTrend == "NEUTRAL" {
+				// Determine true Higher Timeframe (Macro) bias: H1 first, then M15
+				effectiveTrend := "NEUTRAL"
+				if h1Trend != "NEUTRAL" {
+					effectiveTrend = h1Trend
+				} else if m15Trend != "NEUTRAL" {
 					effectiveTrend = m15Trend
-				}
-				if effectiveTrend == "NEUTRAL" {
-					effectiveTrend = m5Trend
 				}
 
 				if effectiveTrend == "BEARISH" && sig.Type == model.Buy {
-					htfReason := fmt.Sprintf("Gate 1: BUY forbidden during %s Bearish Trend (H1=%s, M15=%s, M5=%s)", effectiveTrend, h1Trend, m15Trend, m5Trend)
+					htfReason := fmt.Sprintf("Gate 1: BUY forbidden during %s Trend (H1=%s, M15=%s)", effectiveTrend, h1Trend, m15Trend)
 					log.Printf("[macro-trend] 🛑 COUNTER-TREND REJECTED: %s %s — %s", sig.Type.String(), symKey, htfReason)
 
 					p.SetSignalStatus(sig.Type.String(), "REJECTED", htfReason, nowStr)
@@ -2203,7 +2246,7 @@ func main() {
 					})
 					continue
 				} else if effectiveTrend == "BULLISH" && sig.Type == model.Sell {
-					htfReason := fmt.Sprintf("Gate 1: SELL forbidden during %s Bullish Trend (H1=%s, M15=%s, M5=%s)", effectiveTrend, h1Trend, m15Trend, m5Trend)
+					htfReason := fmt.Sprintf("Gate 1: SELL forbidden during %s Trend (H1=%s, M15=%s)", effectiveTrend, h1Trend, m15Trend)
 					log.Printf("[macro-trend] 🛑 COUNTER-TREND REJECTED: %s %s — %s", sig.Type.String(), symKey, htfReason)
 
 					p.SetSignalStatus(sig.Type.String(), "REJECTED", htfReason, nowStr)
@@ -2218,11 +2261,6 @@ func main() {
 						ConfPct: liveAIConf * 100.0,
 						Reason:  htfReason,
 					})
-					continue
-				} else if effectiveTrend == "NEUTRAL" {
-					htfReason := "Gate 1: Waiting for initial trend formation (M5/M15/H1 warming up)"
-					log.Printf("[macro-trend] ⏳ WARMING UP: %s %s — %s", sig.Type.String(), symKey, htfReason)
-					p.SetSignalStatus(sig.Type.String(), "SKIPPED", htfReason, nowStr)
 					continue
 				}
 
