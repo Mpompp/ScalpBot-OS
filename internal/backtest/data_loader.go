@@ -177,13 +177,36 @@ func parseTickLineBytes(line []byte, defaultSymbol string) (model.Tick, error) {
 	}
 
 	// Format 3: Date, Time, Bid, Ask (4 columns: "YYYY-MM-DD,HH:MM:SS,Bid,Ask")
-	if numTokens >= 4 {
+	if numTokens >= 4 && numTokens < 5 {
 		bid, err1 := parseFloatBytes(tokens[2])
 		ask, err2 := parseFloatBytes(tokens[3])
 		if err1 == nil && err2 == nil {
 			ts := parseCombinedDateTimeBytes(tokens[0], tokens[1])
 			return model.Tick{
 				Symbol:      defaultSymbol,
+				Bid:         bid,
+				Ask:         ask,
+				TimestampNs: ts,
+			}, nil
+		}
+	}
+
+	// Format 4: Exness Official Tick Export (5 columns: "Broker","Symbol","Timestamp","Bid","Ask")
+	if numTokens >= 5 {
+		bidB := bytes.Trim(tokens[3], "\"")
+		askB := bytes.Trim(tokens[4], "\"")
+		bid, err1 := parseFloatBytes(bidB)
+		ask, err2 := parseFloatBytes(askB)
+		if err1 == nil && err2 == nil {
+			tsB := bytes.Trim(tokens[2], "\"")
+			ts := parseDateTimeBytes(tsB)
+			symB := bytes.Trim(tokens[1], "\"")
+			sym := string(symB)
+			if sym == "" {
+				sym = defaultSymbol
+			}
+			return model.Tick{
+				Symbol:      sym,
 				Bid:         bid,
 				Ask:         ask,
 				TimestampNs: ts,
@@ -213,10 +236,12 @@ func parseFloatBytes(b []byte) (float64, error) {
 	var fracPart float64
 	var fracDiv float64 = 1.0
 	inFrac := false
+	digitsParsed := 0
 
 	for i := idx; i < len(b); i++ {
 		c := b[i]
 		if c >= '0' && c <= '9' {
+			digitsParsed++
 			digit := float64(c - '0')
 			if inFrac {
 				fracDiv *= 10.0
@@ -229,6 +254,10 @@ func parseFloatBytes(b []byte) (float64, error) {
 		} else {
 			break
 		}
+	}
+
+	if digitsParsed == 0 {
+		return 0, fmt.Errorf("no valid digits parsed")
 	}
 
 	val := integerPart + (fracPart / fracDiv)

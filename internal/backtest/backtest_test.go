@@ -24,8 +24,13 @@ func TestParseTickLineBytes(t *testing.T) {
 		},
 		{
 			name:     "Tab Delimited Format",
-			line:     "2026.08.14 12:00:00\t1.15704\t1.15707",
+			line:     "2026.08.14 12:00:00	1.15704	1.15707",
 			expected: 1.15704,
+		},
+		{
+			name:     "Exness Official CSV Format",
+			line:     "\"exness\",\"XAUUSDm\",\"2026-01-01 23:05:00.141Z\",4328.321,4328.481",
+			expected: 4328.321,
 		},
 	}
 
