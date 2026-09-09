@@ -8,6 +8,7 @@ import (
 
 	"github.com/pompbot/scalpbot/internal/ai"
 	"github.com/pompbot/scalpbot/internal/executor"
+	"github.com/pompbot/scalpbot/internal/indicator"
 	"github.com/pompbot/scalpbot/internal/marketdata"
 	"github.com/pompbot/scalpbot/internal/model"
 	"github.com/pompbot/scalpbot/internal/risk"
@@ -119,6 +120,16 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 	aggregator := marketdata.NewOHLCVAggregator(e.cfg.CandlePeriod)
 	aiFilter := ai.NewSignalFilter(e.cfg.AIConfig)
 
+	// Gate 1: Macro Trend Aggregators (M15 and H1)
+	m15Agg := marketdata.NewOHLCVAggregator(15 * time.Minute)
+	h1Agg := marketdata.NewOHLCVAggregator(1 * time.Hour)
+	m15Fast := indicator.NewEMA(5)
+	m15Slow := indicator.NewEMA(13)
+	h1Fast := indicator.NewEMA(5)
+	h1Slow := indicator.NewEMA(13)
+	h1Trend := "NEUTRAL"
+	m15Trend := "NEUTRAL"
+
 	// State trackers
 	activePositions := make(map[string]SimulatedPosition, 16)
 	trades := make([]TradeRecord, 0, 1024)
@@ -131,6 +142,7 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 	// Funnel diagnostics
 	candlesClosed := 0
 	signalsGenerated := 0
+	macroRejections := 0
 	aiRejections := 0
 	riskRejections := 0
 
@@ -211,6 +223,35 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 		var sig model.Signal
 		sig = strat.OnTick(tick)
 
+		// Update Gate 1 Macro Trend Aggregators (M15 and H1)
+		if m15Candle, m15Closed := m15Agg.OnTick(tick); m15Closed {
+			f := m15Fast.Update(m15Candle.Close)
+			s := m15Slow.Update(m15Candle.Close)
+			if !math.IsNaN(f) && !math.IsNaN(s) {
+				if f > s*1.0001 {
+					m15Trend = "BULLISH"
+				} else if f < s*0.9999 {
+					m15Trend = "BEARISH"
+				} else {
+					m15Trend = "NEUTRAL"
+				}
+			}
+		}
+
+		if h1Candle, h1Closed := h1Agg.OnTick(tick); h1Closed {
+			f := h1Fast.Update(h1Candle.Close)
+			s := h1Slow.Update(h1Candle.Close)
+			if !math.IsNaN(f) && !math.IsNaN(s) {
+				if f > s*1.0001 {
+					h1Trend = "BULLISH"
+				} else if f < s*0.9999 {
+					h1Trend = "BEARISH"
+				} else {
+					h1Trend = "NEUTRAL"
+				}
+			}
+		}
+
 		if candle, closed := aggregator.OnTick(tick); closed {
 			candlesClosed++
 			lastClosedCandle = candle
@@ -228,6 +269,22 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 
 		// --- C. Evaluate AI Model & Risk Rules ---
 		if sig.IsActionable() {
+			// Gate 1: Macro Trend Lock (H1 first, then M15)
+			effectiveTrend := "NEUTRAL"
+			if h1Trend != "NEUTRAL" {
+				effectiveTrend = h1Trend
+			} else if m15Trend != "NEUTRAL" {
+				effectiveTrend = m15Trend
+			}
+
+			if effectiveTrend == "BEARISH" && sig.Type == model.Buy {
+				macroRejections++
+				continue // Forbid buying during macro downtrend
+			} else if effectiveTrend == "BULLISH" && sig.Type == model.Sell {
+				macroRejections++
+				continue // Forbid selling during macro uptrend
+			}
+
 			// AI Filter Check
 			fastEMA := strat.FastEMA()
 			slowEMA := strat.SlowEMA()
@@ -341,7 +398,7 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 
 	// 3. Compute Quantitative Metrics
 	report := CalculateMetrics(e.cfg.InitialBalance, trades, equityCurve)
-	fmt.Printf("\n[Funnel Diagnostics] Closed Candles: %d | Raw Signals: %d | AI Rejections: %d | Risk Rejections: %d | Executed: %d\n",
-		candlesClosed, signalsGenerated, aiRejections, riskRejections, orderSeq)
+	fmt.Printf("\n[Funnel Diagnostics] Closed Candles: %d | Raw Signals: %d | Gate 1 Macro Vetoes: %d | AI Rejections: %d | Risk Rejections: %d | Executed: %d\n",
+		candlesClosed, signalsGenerated, macroRejections, aiRejections, riskRejections, orderSeq)
 	return &report, trades, nil
 }
