@@ -153,6 +153,16 @@ func (s *Store) SaveDailyState(state DailyState) error {
 		state.Date = time.Now().Format("2006-01-02")
 	}
 
+	// Preserve existing active lot size if caller did not explicitly supply one
+	if state.ActiveLotSize <= 0 {
+		if prev, err := os.ReadFile(s.stateFile); err == nil {
+			var prevState DailyState
+			if err := json.Unmarshal(prev, &prevState); err == nil && prevState.ActiveLotSize > 0 {
+				state.ActiveLotSize = prevState.ActiveLotSize
+			}
+		}
+	}
+
 	marshaled, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
