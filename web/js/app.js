@@ -755,23 +755,25 @@ class DashboardApp {
       if (goldData) {
         // Card 4: Market Weather (HMM)
         const hmmRegime = goldData.ai_regime || 'IDLE';
+        const aiConf = goldData.ai_conf !== undefined ? goldData.ai_conf : 0.60;
+        const confPctStr = `${(aiConf * 100).toFixed(0)}%`;
         if (this.valAIRegime) {
           if (hmmRegime === 'RANGING_CHOP' || hmmRegime === 'StateNoise') {
             this.valAIRegime.textContent = 'RANGING / CHOP';
             this.valAIRegime.className = 'kpi-value amber';
-            if (this.subAIRegimeDesc) this.subAIRegimeDesc.textContent = 'Gaussian HMM StateNoise • Anti-Chop Safe';
+            if (this.subAIRegimeDesc) this.subAIRegimeDesc.textContent = `HMM StateNoise • ${confPctStr} Confidence`;
           } else if (hmmRegime.includes('BULLISH')) {
             this.valAIRegime.textContent = 'BULLISH TREND';
             this.valAIRegime.className = 'kpi-value green';
-            if (this.subAIRegimeDesc) this.subAIRegimeDesc.textContent = 'HMM Bullish Drift • Momentum Impulse';
+            if (this.subAIRegimeDesc) this.subAIRegimeDesc.textContent = `HMM Bullish Drift • ${confPctStr} Confidence`;
           } else if (hmmRegime.includes('BEARISH')) {
             this.valAIRegime.textContent = 'BEARISH TREND';
             this.valAIRegime.className = 'kpi-value red';
-            if (this.subAIRegimeDesc) this.subAIRegimeDesc.textContent = 'HMM Bearish Drift • Breakdown Impulse';
+            if (this.subAIRegimeDesc) this.subAIRegimeDesc.textContent = `HMM Bearish Drift • ${confPctStr} Confidence`;
           } else {
             this.valAIRegime.textContent = hmmRegime.replace(/_/g, ' ');
             this.valAIRegime.className = 'kpi-value';
-            if (this.subAIRegimeDesc) this.subAIRegimeDesc.textContent = 'State: Initializing / Scanning';
+            if (this.subAIRegimeDesc) this.subAIRegimeDesc.textContent = `State: Active • ${confPctStr} Confidence`;
           }
         }
 

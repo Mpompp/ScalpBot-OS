@@ -2122,6 +2122,12 @@ func main() {
 
 				nowStr := time.Now().Format("15:04:05")
 				prof := model.DetectAssetClass(sig.Symbol)
+				liveAIConf := 0.60
+				if p.AIFilter != nil {
+					if c := p.AIFilter.LastConfidence(); c > 0 {
+						liveAIConf = c
+					}
+				}
 
 				// 0.1 Gate 0: London Open Trap Blackout (14:00 - 14:45 WIB)
 				// Empirically proven: 14:00 session generated 80% of historical losses (-$149, 6.7% win rate) due to institutional Judas swings.
@@ -2137,7 +2143,7 @@ func main() {
 						Price:   lastTick.MidPrice(),
 						Status:  "REJECTED",
 						Regime:  "LONDON_OPEN_BLACKOUT",
-						ConfPct: 0.0,
+						ConfPct: liveAIConf * 100.0,
 						Reason:  londonTrapReason,
 					})
 					continue
@@ -2156,7 +2162,7 @@ func main() {
 							Price:   lastTick.MidPrice(),
 							Status:  "REJECTED",
 							Regime:  "SPREAD_SPIKE_LOCK",
-							ConfPct: 0.0,
+							ConfPct: liveAIConf * 100.0,
 							Reason:  spreadSpikeReason,
 						})
 						continue
@@ -2192,7 +2198,7 @@ func main() {
 						Price:   lastTick.MidPrice(),
 						Status:  "REJECTED",
 						Regime:  "HTF_BEARISH_LOCK",
-						ConfPct: 0.0,
+						ConfPct: liveAIConf * 100.0,
 						Reason:  htfReason,
 					})
 					continue
@@ -2209,7 +2215,7 @@ func main() {
 						Price:   lastTick.MidPrice(),
 						Status:  "REJECTED",
 						Regime:  "HTF_BULLISH_LOCK",
-						ConfPct: 0.0,
+						ConfPct: liveAIConf * 100.0,
 						Reason:  htfReason,
 					})
 					continue
@@ -2251,7 +2257,7 @@ func main() {
 							Price:   lastTick.MidPrice(),
 							Status:  "REJECTED",
 							Regime:  "KEY_LEVEL_RESISTANCE",
-							ConfPct: 0.0,
+							ConfPct: liveAIConf * 100.0,
 							Reason:  keyReason,
 						})
 						continue
@@ -2270,7 +2276,7 @@ func main() {
 							Price:   lastTick.MidPrice(),
 							Status:  "REJECTED",
 							Regime:  "KEY_LEVEL_SUPPORT",
-							ConfPct: 0.0,
+							ConfPct: liveAIConf * 100.0,
 							Reason:  keyReason,
 						})
 						continue
@@ -2506,7 +2512,7 @@ func main() {
 						Price:   lastTick.MidPrice(),
 						Status:  "REJECTED",
 						Regime:  "RISK_BLACKOUT",
-						ConfPct: 0.0,
+						ConfPct: liveAIConf * 100.0,
 						Reason:  riskReason,
 					})
 
