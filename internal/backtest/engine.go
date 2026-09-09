@@ -2,6 +2,8 @@ package backtest
 
 import (
 	"fmt"
+	"math"
+	"strings"
 	"time"
 
 	"github.com/pompbot/scalpbot/internal/ai"
@@ -55,19 +57,23 @@ func DefaultEngineConfig() EngineConfig {
 			MaxLotSize:           0.01, // Fixed safe 0.01 lot
 		},
 		TrackerConfig: executor.TrackerConfig{
-			TrailingMode:      executor.TrailingATR,
-			TrailingStopPips:  150.0, // $1.50 trailing room
-			TrailingATRMult:   1.5,
-			BreakEvenPips:     200.0, // $2.00 profit before BE
-			BreakEvenBuffPips: 20.0,  // $0.20 buffer above entry
-			EnableTrailing:    true,
-			EnableBreakEven:   true,
-			EnablePartialTP:   true,
-			PartialTPRatio:    0.5,
-			TP1Pips:           300.0, // $3.00 Partial TP1
-			TP2Pips:           600.0, // $6.00 Final TP2
-			TimeStopDuration:  45 * time.Minute,
-			AutoRemoveOnClose: true,
+			TrailingMode:       executor.TrailingATR,
+			TrailingStopPips:   150.0, // $1.50 trailing room
+			TrailingATRMult:    1.5,
+			BreakEvenPips:      200.0, // $2.00 profit before BE
+			BreakEvenBuffPips:  20.0,  // $0.20 buffer above entry
+			EnableTrailing:     true,
+			EnableBreakEven:    true,
+			EnableProfitLocker: true,
+			Stage1ATRMult:      1.0,
+			Stage2ATRMult:      1.8,
+			Stage3ATRMult:      2.5,
+			EnablePartialTP:    true,
+			PartialTPRatio:     0.5,
+			TP1Pips:            300.0, // $3.00 Partial TP1
+			TP2Pips:            600.0, // $6.00 Final TP2
+			TimeStopDuration:   45 * time.Minute,
+			AutoRemoveOnClose:  true,
 		},
 		AIConfig: ai.FilterConfig{
 			EnableMLFilter:    true,
@@ -116,6 +122,7 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 
 	currentBalance := e.cfg.InitialBalance
 	orderSeq := 0
+	var lastClosedCandle model.Candle
 
 	// Pre-record initial equity point
 	equityCurve = append(equityCurve, EquityPoint{
@@ -191,6 +198,11 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 		sig = strat.OnTick(tick)
 
 		if candle, closed := aggregator.OnTick(tick); closed {
+			lastClosedCandle = candle
+			atrCur := strat.ATR()
+			if atrCur > 0 {
+				atrVal = atrCur
+			}
 			aiFilter.UpdateHMM(candle, atrVal)
 			cSig := strat.OnCandle(candle)
 			if cSig.IsActionable() {
@@ -209,7 +221,7 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 				atrCur = atrVal
 			}
 
-			aiAllowed, _, _, _ := aiFilter.EvaluateSignal(sig, tick, fastEMA, slowEMA, rsiVal, atrCur, 5.0, model.Candle{})
+			aiAllowed, _, _, _ := aiFilter.EvaluateSignal(sig, tick, fastEMA, slowEMA, rsiVal, atrCur, 5.0, lastClosedCandle)
 			if !aiAllowed {
 				continue // Skip signal rejected by AI
 			}
@@ -227,6 +239,49 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 					fillPrice = tick.Ask + slipPrice
 				} else {
 					fillPrice = tick.Bid - slipPrice
+				}
+
+				// Apply Dynamic Volatility & Structure SL/TP Engine
+				execPrice := fillPrice
+				if sig.StopLoss > 0 && sig.TakeProfit > 0 {
+					structSLDist := math.Abs(execPrice - sig.StopLoss)
+					minSL := 3.50
+					maxSL := 6.50
+					isGold := strings.Contains(strings.ToUpper(symbol), "XAU") || strings.Contains(strings.ToUpper(symbol), "GOLD")
+					if !isGold {
+						minSL = 10.0 / pipMult
+						maxSL = 30.0 / pipMult
+					}
+
+					if structSLDist < minSL {
+						structSLDist = minSL
+					} else if structSLDist > maxSL {
+						structSLDist = maxSL
+					}
+
+					if order.Side == model.SideBuy {
+						order.StopLoss = execPrice - structSLDist
+					} else {
+						order.StopLoss = execPrice + structSLDist
+					}
+
+					structTPDist := math.Abs(sig.TakeProfit - execPrice)
+					minTPDist := structSLDist * 2.2
+					if isGold && minTPDist < 8.00 {
+						minTPDist = 8.00
+					}
+					if structTPDist < minTPDist {
+						structTPDist = minTPDist
+					}
+					if isGold && structTPDist > 25.00 {
+						structTPDist = 25.00
+					}
+
+					if order.Side == model.SideBuy {
+						order.TakeProfit = execPrice + structTPDist
+					} else {
+						order.TakeProfit = execPrice - structTPDist
+					}
 				}
 
 				pos := model.Position{
