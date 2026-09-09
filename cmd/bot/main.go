@@ -2235,8 +2235,11 @@ func main() {
 				p.mu.RUnlock()
 
 				if high24h > 0 && low24h > 0 && high24h > low24h {
-					if sig.Type == model.Buy && (high24h-lastTick.Ask) < atrVal*0.35 {
-						keyReason := fmt.Sprintf("Gate 1.5: Key Level Guard — BUY forbidden within $%.2f (<0.35x ATR) of 24H High ($%.2f)", high24h-lastTick.Ask, high24h)
+					// In a confirmed Bullish Trend, breaking new 24H highs is normal continuation.
+					// Only block BUY if trend is NOT confirmed bullish or RSI is severely overbought (>72).
+					isOverextendedBuy := (effectiveTrend != "BULLISH") || (p.Strategy.RSI() > 72.0)
+					if sig.Type == model.Buy && isOverextendedBuy && (high24h-lastTick.Ask) < atrVal*0.35 {
+						keyReason := fmt.Sprintf("Gate 1.5: Key Level Guard — BUY forbidden into unconfirmed 24H High ($%.2f, RSI=%.1f)", high24h, p.Strategy.RSI())
 						log.Printf("[key-level] 🛑 RESISTANCE CEILING: %s %s — %s", sig.Type.String(), symKey, keyReason)
 						p.SetSignalStatus(sig.Type.String(), "REJECTED", keyReason, nowStr)
 						recordSignalEvent(web.SignalEvent{
@@ -2250,8 +2253,12 @@ func main() {
 							Reason:  keyReason,
 						})
 						continue
-					} else if sig.Type == model.Sell && (lastTick.Bid-low24h) < atrVal*0.35 {
-						keyReason := fmt.Sprintf("Gate 1.5: Key Level Guard — SELL forbidden within $%.2f (<0.35x ATR) of 24H Low ($%.2f)", lastTick.Bid-low24h, low24h)
+					}
+					// In a confirmed Bearish Trend, breaking new 24H lows is normal continuation.
+					// Only block SELL if trend is NOT confirmed bearish or RSI is severely oversold (<28).
+					isOverextendedSell := (effectiveTrend != "BEARISH") || (p.Strategy.RSI() < 28.0)
+					if sig.Type == model.Sell && isOverextendedSell && (lastTick.Bid-low24h) < atrVal*0.35 {
+						keyReason := fmt.Sprintf("Gate 1.5: Key Level Guard — SELL forbidden into unconfirmed 24H Low ($%.2f, RSI=%.1f)", low24h, p.Strategy.RSI())
 						log.Printf("[key-level] 🛑 SUPPORT FLOOR: %s %s — %s", sig.Type.String(), symKey, keyReason)
 						p.SetSignalStatus(sig.Type.String(), "REJECTED", keyReason, nowStr)
 						recordSignalEvent(web.SignalEvent{

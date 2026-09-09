@@ -217,9 +217,13 @@ func (f *SignalFilter) EvaluateSignal(
 		}
 	default: // hmm.StateNoise / Ranging Chop
 		if f.cfg.FilterRangingChop {
-			return false, 0.35, regime, "AI Filter REJECT: Market is in Ranging/Chop state (HMM StateNoise)"
+			// In neutral weather, penalize HMM score to 0.40.
+			// High-conviction GBDT triggers (score >= 0.70) can still achieve composite >= 0.55 and pass,
+			// while weak/choppy triggers are filtered naturally by the composite decision gate.
+			hmmScore = 0.40
+		} else {
+			hmmScore = 0.50
 		}
-		hmmScore = 0.50
 	}
 
 	// 3. Component B: GBDT Microstructure & Candlestick Scorer (Weight: 50%)
