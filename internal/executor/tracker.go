@@ -468,12 +468,12 @@ func (pt *PositionTracker) OnTick(tick model.Tick, atrValue float64, pipMult flo
 		}
 
 		if pt.cfg.EnableProfitLocker && prof.IsGold {
-			// Stage 3: Lock 75% Profit when priceGain >= 2.8x ATR (floor $10.50)
-			stage3Threshold := math.Max(atrValue*pt.cfg.Stage3ATRMult, 10.50)
-			// Stage 2: Lock 50% Profit when priceGain >= 2.0x ATR (floor $7.50)
-			stage2Threshold := math.Max(atrValue*pt.cfg.Stage2ATRMult, 7.50)
-			// Stage 1: Break-Even Buffer when priceGain >= 1.5x ATR (floor $5.00)
-			stage1Threshold := math.Max(atrValue*pt.cfg.Stage1ATRMult, 5.00)
+			// Stage 3: Lock 75% Profit when priceGain >= 2.5x ATR (floor $8.50)
+			stage3Threshold := math.Max(atrValue*pt.cfg.Stage3ATRMult, 8.50)
+			// Stage 2: Lock 50% Profit when priceGain >= 1.8x ATR (floor $6.00)
+			stage2Threshold := math.Max(atrValue*pt.cfg.Stage2ATRMult, 6.00)
+			// Stage 1: Break-Even Buffer when priceGain >= 1.0x ATR (floor $3.00)
+			stage1Threshold := math.Max(atrValue*pt.cfg.Stage1ATRMult, 3.00)
 
 			if priceGain >= stage3Threshold && tp.ProfitStage < 3 {
 				lockedGain := priceGain * 0.75

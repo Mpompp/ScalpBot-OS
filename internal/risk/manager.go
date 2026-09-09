@@ -216,6 +216,51 @@ func (m *Manager) Evaluate(signal model.Signal, tick model.Tick, atrValue float6
 	return order, nil
 }
 
+// EvaluateWithConfidence determines whether a trade should be executed,
+// scaling the position size dynamically using Marcos López de Prado's
+// Probabilistic Bet Sizing (Lecture 5: Advances in Financial Machine Learning).
+func (m *Manager) EvaluateWithConfidence(
+	signal model.Signal,
+	tick model.Tick,
+	atrValue float64,
+	aiConfidence float64,
+) (model.OrderRequest, error) {
+	// First evaluate standard risk rules
+	order, err := m.Evaluate(signal, tick, atrValue)
+	if err != nil {
+		return order, err
+	}
+
+	// 0. Manual User Override Priority: if fixedLots is configured, respect it absolutely
+	if m.fixedLots > 0 {
+		order.Lots = math.Round(m.fixedLots*100) / 100
+		return order, nil
+	}
+
+	// Marcos López de Prado: Dynamic Bet Sizing via Predicted Probabilities
+	// z = (p - 0.5) / sqrt(p * (1 - p))
+	// m = 2 * Phi(z) - 1, where Phi(z) = 0.5 * (1 + erf(z / sqrt(2)))
+	// lot = MinLotSize + m * (MaxLotSize - MinLotSize)
+	if aiConfidence > 0 && m.cfg.MaxLotSize > m.cfg.MinLotSize {
+		p := math.Max(0.50, math.Min(0.95, aiConfidence))
+		z := (p - 0.5) / math.Sqrt(p*(1.0-p))
+		phiZ := 0.5 * (1.0 + math.Erf(z/math.Sqrt2))
+		betFraction := math.Max(0.0, math.Min(1.0, 2.0*phiZ-1.0))
+
+		scaledLots := m.cfg.MinLotSize + betFraction*(m.cfg.MaxLotSize-m.cfg.MinLotSize)
+		// Size Discretization: round to broker step size (0.01)
+		scaledLots = math.Round(scaledLots*100) / 100
+		if scaledLots < m.cfg.MinLotSize {
+			scaledLots = m.cfg.MinLotSize
+		} else if scaledLots > m.cfg.MaxLotSize {
+			scaledLots = m.cfg.MaxLotSize
+		}
+		order.Lots = scaledLots
+	}
+
+	return order, nil
+}
+
 // calculateLotSize determines position size based on risk parameters.
 func (m *Manager) calculateLotSize(symbol string, atrValue float64, pipMult float64) (float64, error) {
 	// 0. Manual User Override Priority: if fixedLots is configured, bypass all ATR and caps!

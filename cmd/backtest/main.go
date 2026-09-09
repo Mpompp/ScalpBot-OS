@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pompbot/scalpbot/config"
@@ -47,22 +47,44 @@ func main() {
 			engineCfg.Symbol = cfg.Bot.Symbol
 			engineCfg.CandlePeriod = cfg.MarketData.CandlePeriod
 			engineCfg.StrategyConfig = strategy.MomentumScalperConfig{
-				FastEMAPeriod: cfg.Strategy.FastEMAPeriod,
-				SlowEMAPeriod: cfg.Strategy.SlowEMAPeriod,
-				RSIPeriod:     cfg.Strategy.RSIPeriod,
-				ATRPeriod:     cfg.Strategy.ATRPeriod,
-				RSIOverbought: cfg.Strategy.RSIOverbought,
-				RSIOversold:   cfg.Strategy.RSIOversold,
-				ATRMinimum:    cfg.Strategy.ATRMinimum,
+				FastEMAPeriod:       cfg.Strategy.FastEMAPeriod,
+				SlowEMAPeriod:       cfg.Strategy.SlowEMAPeriod,
+				RSIPeriod:           cfg.Strategy.RSIPeriod,
+				ATRPeriod:           cfg.Strategy.ATRPeriod,
+				RSIOverbought:       cfg.Strategy.RSIOverbought,
+				RSIOversold:         cfg.Strategy.RSIOversold,
+				ATRMinimum:          cfg.Strategy.ATRMinimum,
+				MinVolRatio:         cfg.Strategy.MinVolRatio,
+				EnableLimitPullback: cfg.Strategy.EnableLimitPullback,
+				PullbackDiscountATR: cfg.Strategy.PullbackDiscountATR,
+				Symbol:              cfg.Bot.Symbol,
 			}
 			engineCfg.RiskConfig = risk.ManagerConfig{
-				InitialEquity:    cfg.Risk.InitialEquity,
-				RiskPerTrade:     cfg.Risk.RiskPerTrade,
-				MaxDailyDrawdown: cfg.Risk.MaxDailyDrawdown,
-				MaxSpreadPips:    cfg.Risk.MaxSpreadPips,
-				MaxOpenPositions: cfg.Risk.MaxOpenPositions,
-				MinLotSize:       cfg.Risk.MinLotSize,
-				MaxLotSize:       cfg.Risk.MaxLotSize,
+				InitialEquity:         cfg.Risk.InitialEquity,
+				RiskPerTrade:          cfg.Risk.RiskPerTrade,
+				MaxDailyDrawdown:      cfg.Risk.MaxDailyDrawdown,
+				MaxSpreadPips:         cfg.Risk.MaxSpreadPips,
+				MaxPositionsPerSymbol: 1,
+				MaxOpenPositions:      cfg.Risk.MaxOpenPositions,
+				MinLotSize:            cfg.Risk.MinLotSize,
+				MaxLotSize:            cfg.Risk.MaxLotSize,
+			}
+			if cfg.Session.Enabled {
+				sessionDefs := map[string]risk.SessionWindow{
+					"london":  {Name: "London", StartHour: 7, EndHour: 16},
+					"newyork": {Name: "New York", StartHour: 12, EndHour: 21},
+					"overlap": {Name: "London/NY Overlap", StartHour: 12, EndHour: 16},
+					"asian":   {Name: "Asian", StartHour: 23, EndHour: 8},
+				}
+				var windows []risk.SessionWindow
+				for _, s := range cfg.Session.Sessions {
+					if w, ok := sessionDefs[strings.ToLower(s)]; ok {
+						windows = append(windows, w)
+					}
+				}
+				if len(windows) > 0 {
+					engineCfg.SessionFilter = risk.NewSessionFilter(windows)
+				}
 			}
 			trailingMode := executor.TrailingFixed
 			if cfg.Position.TrailingMode == "atr" {
@@ -168,6 +190,7 @@ func exportTradesToCSV(filePath string, trades []backtest.TradeRecord) error {
 	_ = writer.Write([]string{
 		"TradeID", "Symbol", "Side", "Lots", "EntryPrice", "ExitPrice",
 		"PnL_USD", "PnL_Pips", "Commission", "Reason", "IsPartial",
+		"EntryTimeNs", "ExitTimeNs",
 	})
 
 	for _, t := range trades {
@@ -182,7 +205,9 @@ func exportTradesToCSV(filePath string, trades []backtest.TradeRecord) error {
 			fmt.Sprintf("%.1f", t.PnLPips),
 			fmt.Sprintf("%.2f", t.Commission),
 			t.Reason,
-			strconv.FormatBool(t.IsPartial),
+			fmt.Sprintf("%t", t.IsPartial),
+			fmt.Sprintf("%d", t.EntryTimeNs),
+			fmt.Sprintf("%d", t.ExitTimeNs),
 		})
 	}
 

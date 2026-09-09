@@ -2531,8 +2531,8 @@ func main() {
 					}
 				}
 
-				// 3. Risk Engine Evaluation
-				order, err := riskMgr.Evaluate(sig, lastTick, atrVal)
+				// 3. Risk Engine Evaluation with Marcos López de Prado Dynamic Bet Sizing
+				order, err := riskMgr.EvaluateWithConfidence(sig, lastTick, atrVal, liveAIConf)
 				if err != nil {
 					riskReason := fmt.Sprintf("Risk Veto: %v", err)
 					if strings.Contains(riskReason, "news-blackout") {

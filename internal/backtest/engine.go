@@ -26,6 +26,7 @@ type EngineConfig struct {
 	RiskConfig     risk.ManagerConfig
 	TrackerConfig  executor.TrackerConfig
 	AIConfig       ai.FilterConfig
+	SessionFilter  *risk.SessionFilter
 }
 
 // DefaultEngineConfig returns standard backtest configuration for Gold (XAUUSD) scalping.
@@ -111,6 +112,9 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 	// 1. Initialize Pipeline Components
 	strat := strategy.NewMomentumScalper("scalper", e.cfg.StrategyConfig)
 	riskMgr := risk.NewManager(e.cfg.RiskConfig)
+	if e.cfg.SessionFilter != nil {
+		riskMgr.AddFilter(e.cfg.SessionFilter)
+	}
 	tracker := executor.NewPositionTracker(e.cfg.TrackerConfig)
 	aggregator := marketdata.NewOHLCVAggregator(e.cfg.CandlePeriod)
 	aiFilter := ai.NewSignalFilter(e.cfg.AIConfig)
@@ -123,6 +127,12 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 	currentBalance := e.cfg.InitialBalance
 	orderSeq := 0
 	var lastClosedCandle model.Candle
+
+	// Funnel diagnostics
+	candlesClosed := 0
+	signalsGenerated := 0
+	aiRejections := 0
+	riskRejections := 0
 
 	// Pre-record initial equity point
 	equityCurve = append(equityCurve, EquityPoint{
@@ -166,7 +176,11 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 			netPnL := grossPnL - comm
 
 			currentBalance += netPnL
-			riskMgr.RecordClose(netPnL)
+			if !ce.IsPartial {
+				riskMgr.RecordCloseForSymbol(symbol, netPnL)
+			} else {
+				riskMgr.RecordClose(netPnL)
+			}
 
 			// Record trade history
 			trades = append(trades, TradeRecord{
@@ -198,6 +212,7 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 		sig = strat.OnTick(tick)
 
 		if candle, closed := aggregator.OnTick(tick); closed {
+			candlesClosed++
 			lastClosedCandle = candle
 			atrCur := strat.ATR()
 			if atrCur > 0 {
@@ -206,6 +221,7 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 			aiFilter.UpdateHMM(candle, atrVal)
 			cSig := strat.OnCandle(candle)
 			if cSig.IsActionable() {
+				signalsGenerated++
 				sig = cSig
 			}
 		}
@@ -221,13 +237,18 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 				atrCur = atrVal
 			}
 
-			aiAllowed, _, _, _ := aiFilter.EvaluateSignal(sig, tick, fastEMA, slowEMA, rsiVal, atrCur, 5.0, lastClosedCandle)
+			aiAllowed, aiConf, _, _ := aiFilter.EvaluateSignal(sig, tick, fastEMA, slowEMA, rsiVal, atrCur, 5.0, lastClosedCandle)
 			if !aiAllowed {
+				aiRejections++
 				continue // Skip signal rejected by AI
 			}
 
-			// Risk Engine Check
-			order, err := riskMgr.Evaluate(sig, tick, atrVal)
+			// Risk Engine Check with Marcos López de Prado Dynamic Bet Sizing
+			order, err := riskMgr.EvaluateWithConfidence(sig, tick, atrVal, aiConf)
+			if err != nil {
+				riskRejections++
+				continue
+			}
 			if err == nil {
 				orderSeq++
 				orderID := fmt.Sprintf("BT-%d", orderSeq)
@@ -320,5 +341,7 @@ func (e *Engine) Run(ticks []model.Tick) (*PerformanceReport, []TradeRecord, err
 
 	// 3. Compute Quantitative Metrics
 	report := CalculateMetrics(e.cfg.InitialBalance, trades, equityCurve)
+	fmt.Printf("\n[Funnel Diagnostics] Closed Candles: %d | Raw Signals: %d | AI Rejections: %d | Risk Rejections: %d | Executed: %d\n",
+		candlesClosed, signalsGenerated, aiRejections, riskRejections, orderSeq)
 	return &report, trades, nil
 }
